@@ -37,8 +37,9 @@ test('video track matches the video files and the mouth patches', () => {
   }
 });
 
-test('overlay: video mode default, still mode kept as fallback', () => {
+test('overlay: live rig is the default; video and still modes kept as fallbacks', () => {
   const js = fs.readFileSync(new URL('../public/overlay.js', import.meta.url), 'utf8');
-  assert.match(js, /mode: 'video'/); assert.match(js, /initStill\(\)/); assert.match(js, /requestVideoFrameCallback/);
+  assert.match(js, /mode: 'rig'/); assert.match(js, /initRig\(\)/); assert.match(js, /rig-failed/, 'falls back to the still picture if WebGL / the rig fails');
+  assert.match(js, /initStill\(\)/); assert.match(js, /requestVideoFrameCallback/);
   assert.match(js, /video-failed/, 'falls back to the still picture if the video or track fails');
 });

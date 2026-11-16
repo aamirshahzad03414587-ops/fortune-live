@@ -49,13 +49,93 @@
       else since++;
       vis[i] = cur;
     }
-    return { fps: o.fps, duration: n / o.fps, ref, gate, rms, open, vis };
+    const shape = classifyShapes(pcm, sampleRate, hop, win, n, open, raw, o);
+    return { fps: o.fps, duration: n / o.fps, ref, gate, rms, open, vis, shape };
+  }
+
+  // ------------------------------------------------------------------ mouth shapes for the 2D rig
+  // Shapes: 0 rest · 1 small · 2 E (ee/i/s, teeth) · 3 A (ah) · 4 O (oh) · 5 U (oo/w)
+  const SHAPES = ['rest', 'small', 'E', 'A', 'O', 'U'];
+  function fft(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = (-2 * Math.PI) / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const a = i + k, b = a + len / 2, xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+          const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+        }
+      }
+    }
+  }
+  /**
+   * Vowel-ish class per frame from the spectrum: spectral centroid (150-3500 Hz) relative to this clip's
+   * median says back/rounded (O, U) vs front (E) vs open (A); strong 4-10 kHz energy (s, sh, z, ch) shows teeth.
+   * The openness envelope decides how wide (small vs full shape). Smoothed with a 5-frame majority and a hold time.
+   */
+  function classifyShapes(pcm, sr, hop, win, n, open, raw, o) {
+    const N = 512, re = new Float32Array(N), im = new Float32Array(N), hz = sr / N;
+    const cent = new Float32Array(n), sib = new Float32Array(n), front = new Float32Array(n);
+    const b = (f) => Math.min(N / 2 - 1, Math.max(1, Math.round(f / hz)));
+    const L0 = b(150), L1 = b(900), M1 = b(1700), H1 = b(3500), S0 = b(4000), S1 = b(Math.min(10000, sr / 2 - 100));
+    const hann = new Float32Array(Math.min(win, N)); for (let i = 0; i < hann.length; i++) hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (hann.length - 1));
+    const cents = [];
+    for (let i = 0; i < n; i++) {
+      if (raw[i] === 0) continue;
+      const s0 = Math.round(i * hop); re.fill(0); im.fill(0);
+      for (let k = 0; k < hann.length && s0 + k < pcm.length; k++) re[k] = pcm[s0 + k] * hann[k];
+      fft(re, im);
+      let eL = 0, eM = 0, eH = 0, eS = 0, cw = 0, cs = 0;
+      for (let k = L0; k <= S1; k++) {
+        const e = re[k] * re[k] + im[k] * im[k];
+        if (k < L1) eL += e; else if (k < M1) eM += e; else if (k < H1) eH += e; else if (k >= S0) eS += e;
+        if (k < H1) { cw += e; cs += e * k * hz; }
+      }
+      const tot = eL + eM + eH + eS + 1e-12;
+      cent[i] = cs / (cw + 1e-12); sib[i] = eS / tot; front[i] = eH / (eM + 1e-12);
+      cents.push(cent[i]);
+    }
+    const med = cents.length ? percentile(cents, 50) : 1000;
+    const want = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = open[i];
+      if (v < o.tO || raw[i] === 0) { want[i] = 0; continue; }
+      const rel = cent[i] / med;
+      let s;
+      if (sib[i] > 0.45) s = v < 0.5 ? 1 : 2;
+      else if (rel < 0.8) s = v > 0.5 ? 4 : 5;
+      else if (rel > 1.22 || front[i] > 1.4) s = 2;
+      else s = v > 0.5 ? 3 : 1;
+      want[i] = s;
+    }
+    // majority over 5 frames, then hold >= 60 ms (closing on real silence right away)
+    const out = new Uint8Array(n), cnt = new Uint8Array(6);
+    let cur = 0, since = 99;
+    for (let i = 0; i < n; i++) {
+      cnt.fill(0); for (let k = Math.max(0, i - 2); k <= Math.min(n - 1, i + 2); k++) cnt[want[k]]++;
+      let best = want[i]; for (let s = 0; s < 6; s++) if (cnt[s] > cnt[best]) best = s;
+      if (best !== cur && (since >= 6 || (best === 0 && raw[i] === 0))) { cur = best; since = 0; } else since++;
+      out[i] = cur;
+    }
+    return out;
+  }
+
+  /** { shape: 'rest'|'small'|'E'|'A'|'O'|'U', open: 0..1 } at time t (seconds into the clip). */
+  function shapeAt(track, t) {
+    if (!track || t < 0) return { shape: 'rest', open: 0 };
+    const i = Math.floor(t * track.fps);
+    if (i < 0 || i >= track.vis.length) return { shape: 'rest', open: 0 };
+    const s = track.shape ? track.shape[i] : [0, 1, 2, 3][track.vis[i]];
+    return { shape: SHAPES[s], open: track.open ? track.open[i] : OPEN[track.vis[i]] };
   }
 
   /** Fallback when there are no samples: rough syllables from the text, spread over `seconds`. */
   function fromText(text, seconds, opts) {
     const fps = (opts && opts.fps) || 100, n = Math.max(1, Math.round(seconds * fps));
-    const vis = new Uint8Array(n), open = new Float32Array(n);
+    const vis = new Uint8Array(n), open = new Float32Array(n), shp = new Uint8Array(n);
     const toks = String(text || '').split(/(\s+|[,.!?;:]+)/).filter((t) => t && t.trim());
     const units = toks.map((t) => (/^[,.!?;:]+$/.test(t) ? { pause: /[.!?]/.test(t) ? 6 : 3 } : { word: t, len: Math.max(2, t.replace(/[^\p{L}\p{N}]/gu, '').length) }));
     const total = units.reduce((a, u) => a + (u.pause || u.len + 1), 0) || 1;
@@ -69,13 +149,14 @@
         for (const g of groups) {
           if (!/[aeiouy]/.test(g)) continue;
           const shape = /a|o/.test(g) ? (g.includes('o') || g.includes('u') ? 1 : 3) : /e|i|y/.test(g) ? 2 : 1;
-          for (let j = 0; j < per; j++) { const idx = f + k * per + j; if (idx >= n) break; const edge = j === 0 || j === per - 1; vis[idx] = edge ? Math.min(shape, 1) : shape; open[idx] = OPEN[vis[idx]]; }
+          const rs = g.includes('o') ? 4 : g.includes('u') ? 5 : g.includes('a') ? 3 : 2;   // rig shape
+          for (let j = 0; j < per; j++) { const idx = f + k * per + j; if (idx >= n) break; const edge = j === 0 || j === per - 1; vis[idx] = edge ? Math.min(shape, 1) : shape; open[idx] = OPEN[vis[idx]]; shp[idx] = edge ? 1 : rs; }
           k++;
         }
       }
       f += span;
     }
-    return { fps, duration: n / fps, vis, open, fromText: true };
+    return { fps, duration: n / fps, vis, open, shape: shp, fromText: true };
   }
 
   function at(track, t) {
@@ -106,6 +187,6 @@
     return { frames: n, pearson: pearson(m, a), pearsonLoudness: pearson(m, ld), silenceClosedPct: silent ? (100 * silentClosed) / silent : 100, voicedOpenPct: voiced ? (100 * voicedOpen) / voiced : 0, changesPerSecond: changes / (n / track.fps) };
   }
 
-  const api = { analyze, fromText, at, stats, OPEN, NAMES, DEFAULTS: DEF };
+  const api = { analyze, fromText, at, shapeAt, stats, OPEN, NAMES, SHAPES, DEFAULTS: DEF };
   root.LipSync = api;
 })(typeof window !== 'undefined' ? window : globalThis);

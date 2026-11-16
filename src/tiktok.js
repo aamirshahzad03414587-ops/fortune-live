@@ -45,6 +45,7 @@ export class TikTokBridge extends EventEmitter {
     });
     conn.on(WebcastEvent.LIKE, (d) => this.live.handleLike({ ...user(d), count: Number(d.likeCount || 1) }));
     conn.on(WebcastEvent.FOLLOW, (d) => this.live.handleFollow(user(d)));
+    conn.on(WebcastEvent.MEMBER, (d) => this.live.handleJoin(user(d)));   // someone joined the LIVE -> batched welcome
     conn.on(WebcastEvent.STREAM_END, () => this.setStatus('ended', 'The LIVE has ended'));
     conn.on(ControlEvent.DISCONNECTED, () => { if (this.conn === conn) this.setStatus('disconnected'); });
     conn.on(ControlEvent.ERROR, (e) => this.emit('log', `TikTok error: ${e?.info || e?.exception?.message || e}`));

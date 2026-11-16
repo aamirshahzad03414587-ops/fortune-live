@@ -15,7 +15,8 @@ const DEFAULTS = {
   overlay: {
     title: 'Fate Reading', callToAction: '', characterImage: '/assets/mira2.jpg', showQueue: true, queueVisibleCount: 5, showLikeHearts: true, showFollowToasts: true, showChat: true, browserVoiceFallback: true,
     character: {
-      mode: 'video',
+      mode: 'rig',
+      rig: { base: '/assets/rig/', image: '/assets/mira2.jpg' },
       video: { src: '/assets/mira2-idle-loop-1080.mp4', src720: '/assets/mira2-idle-loop-720.mp4', quality: 'auto', track: '/assets/mira2-idle-loop.track.json', poster: '/assets/mira2v-poster.jpg', toneMatch: true },
       still: '/assets/mira2.jpg',
       breathing: { enabled: true, amount: 0.0045, seconds: 4.6 },
@@ -24,8 +25,9 @@ const DEFAULTS = {
     },
     effects: { sparkles: true, sparkleCount: 28, ballGlow: true, floatingCards: false },
   },
-  voice: { enabled: true, voice: 'en-US-AvaNeural', urduVoice: 'ur-PK-UzmaNeural', hindiVoice: 'hi-IN-SwaraNeural', rate: '+2%', pitch: '+6%', browserLang: 'en-US', readingSpeechStart: 3, talkSpeechStart: 0.6, tailSeconds: 1.2, minSaySeconds: 3 },
-  chat: { enabled: true, mode: 'everyone', userCooldownSeconds: 60, maxQueue: 8, maxCommentAgeSeconds: 90, secondsBetweenReplies: 1.5, idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 20, greetDelaySeconds: 4, maxReplyWords: 45 },
+  voice: { enabled: true, voice: 'en-US-AvaNeural', urduVoice: 'ur-PK-UzmaNeural', hindiVoice: 'hi-IN-SwaraNeural', rate: '+2%', pitch: '+6%', browserLang: 'en-US', readingSpeechStart: 3, talkSpeechStart: 0.6, tailSeconds: 0.8, minSaySeconds: 3 },
+  chat: { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 0.6, prefetchReplies: 2, idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, greetDelaySeconds: 4, maxReplyWords: 35,
+    welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 3, readQuestionAloud: true },
   llm: { enabled: false, baseUrl: '', apiKey: '', model: '', temperature: 0.9, maxTokens: 120, timeoutMs: 8000, extraPersona: '' },
 };
 

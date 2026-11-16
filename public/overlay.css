@@ -24,6 +24,8 @@ body { font-family: 'Quicksand', 'Segoe UI', sans-serif; color: var(--ink); }
 #baseVid { object-fit:fill; display:block; opacity:0; }
 #baseVid.on { opacity:1; }
 .videoMode #body, .videoMode #warm, .videoMode #scene { display:none; }
+.rigMode #still, .rigMode #body, .rigMode #mouthWrap, .rigMode #baseVid { display:none; }
+.rigCanvas { display:block; }
 #pTrack, #sceneTrack { transform-origin: 0 0; will-change: transform; pointer-events:none; }
 #mouth img { position:absolute; inset:0; width:100%; height:100%; opacity:0; display:block; }
 #warm { mix-blend-mode: soft-light; background: radial-gradient(ellipse at 50% 40%, rgba(255,190,110,.55), rgba(255,150,60,0) 70%); opacity:.0; pointer-events:none; }

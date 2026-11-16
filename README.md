@@ -126,7 +126,29 @@ Gift streaks are added up: 30 Roses in a streak count as 30 coins and unlock the
 ## Mira: animation, voice and chat
 
 ### How she is animated (files in `public/assets/`)
-**Video mode (default).** A generated idle clip of Mira (breathing, blinking, candles, crystal ball, smoke, mouth closed) loops underneath, and the lip-sync mouth is laid on top of her face and follows it frame by frame.
+**Live 2D rig (default, `overlay.character.mode: "rig"`).** Her own painting is turned into a real-time puppet that runs in the overlay with WebGL (`public/rig.js`), so she moves all the time and reacts to the chat. Nothing is a video loop and nothing is pasted on top of her face.
+
+| File (`public/assets/rig/`) | Used for |
+|---|---|
+| `char-alpha.png` | Her silhouette (anime matte from rembg `isnet-anime`, cleaned up). |
+| `bg.jpg` | The room with her painted out. It only shows in the few pixels she uncovers when she moves, so there are never holes. |
+| `weights.png` | Where each motion applies: head + hair, side hair (sways), fringe. |
+| `face/eye*-lid1/lid2/closed/happy.png` | Eyelids painted in her style: two half-closed steps, closed, and happy "^ ^" eyes. |
+| `face/eye*-white/inner/mask/band.png` | Eye whites, her iris and the lash line, so her eyes can glance around. |
+| `face/mouth-*.png` | Mouth shapes made from her own lips: rest, smile, small, E/I, A, O, U and a happy open smile. |
+
+Every frame, the eyes, mouth and blush are drawn into a small face canvas, then one shader warps the whole picture. The face canvas goes through the same warp, so the mouth and eyes move with her head and jaw. The motions are:
+* breathing (chest and shoulders) and a slow body sway; the table, hands and crystal ball stay still
+* head tilt, turn and nod, with the nose, eyes and mouth moving more than the outline (parallax)
+* hair on springs that swing after head moves, plus a soft draft
+* jaw drop with the mouth opening, and brows that lift
+* blinking every 2–6 s (sometimes twice), glances, and a smile now and then
+
+Body language: she **nods** when she welcomes people, **tilts her head and raises her brows** while she reads a question (before answering), **smiles with happy eyes and a blush** when she thanks someone for a gift or a follow, and looks down at the ball for readings.
+The mouth shape comes from her voice: the MP3 is analysed 100 times per second for loudness (how open) and spectrum (which shape). Low, dark vowels give O/U, bright ones and "s/sh" give E/I (teeth), open vowels give A, and silence closes the mouth. Rebuild the rig after changing the art with `python tools/build-rig.py` (needs `opencv-python-headless`, `numpy`, `pillow`, `rembg`).
+If WebGL is not available, the overlay falls back to the still picture by itself.
+
+**Video mode.** A generated idle clip of Mira (breathing, blinking, candles, crystal ball, smoke, mouth closed) loops underneath, and the lip-sync mouth is laid on top of her face and follows it frame by frame.
 
 | File | Used for |
 |---|---|

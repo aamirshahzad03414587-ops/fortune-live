@@ -153,6 +153,13 @@ const T = {
       '{names}, your {gift} just lit every candle in my room. Thank you!',
       'Oh my stars, {names}! Thank you for the {gift}. If you have your code, comment it now!',
     ],
+    welcome: [
+      'Welcome {names}!',
+      'Welcome {names}! Come sit by my crystal ball.',
+      'Hello {names}, welcome to my table!',
+      'Welcome in, {names}! Ask me anything.',
+      'Hi {names}! The candles brightened when you came in.',
+    ],
     greetFollow: [
       'Welcome to the circle, {names}! Thank you for following.',
       '{names}, thank you for the follow! The stars noticed.',
@@ -246,6 +253,8 @@ export class ReplyEngine {
 
   greetGift(names, gift) { return this.fill(this.pick('en', 'greetGift'), { names: joinNames(names), gift: gift || 'gift' }); }
   greetFollow(names) { return this.fill(this.pick('en', 'greetFollow'), { names: joinNames(names) }); }
+  /** Batched welcome for viewers who joined: "Welcome Ali, Sara and 3 others!" */
+  welcome(names, maxNames = 3) { return this.fill(this.pick('en', 'welcome'), { names: welcomeNames(names, maxNames) }); }
   idlePrompt(custom) {
     if (Array.isArray(custom) && custom.length) { const list = { en: { c: custom } }; return this.fill(list.en.c[Math.floor(this.random() * custom.length)], {}); }
     return this.pick('en', 'idlePrompts');
@@ -253,6 +262,31 @@ export class ReplyEngine {
 }
 
 function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+/** "Ali", "Ali and Sara", "Ali, Sara and Omar", "Ali, Sara, Omar and 3 others" (max names spoken, the rest counted). */
+export function welcomeNames(names, max = 3) {
+  const n = [...new Set(names.map(spokenName))];
+  if (!n.length) return 'friends';
+  if (n.length <= max) return n.length === 1 ? n[0] : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+  const rest = n.length - max;
+  return n.slice(0, max).join(', ') + ` and ${rest} other${rest > 1 ? 's' : ''}`;
+}
+
+const Q_START = /^(what|whats|what's|when|where|who|whom|why|how|which|will|would|can|could|should|shall|is|are|was|were|do|does|did|am|have|has|kya|kab|kaise|kaisi|kese|kyun|kyon|kyu|kon|kaun|kitna|kitne|kitni|kahan|kidhar)\b/i;
+/** Does the comment ask something? ("will I get married?", "kya meri shaadi hogi", "what is my lucky number") */
+export function isQuestion(text) { const t = normalizeComment(text); return /\?\s*$/.test(t) || Q_START.test(t); }
+
+/** Spoken reply that first repeats who asked what: "Ali asks, will I get married? Love follows its own calendar..." */
+export function withQuestion(nickname, comment, answer, maxWords = 14) {
+  const name = spokenName(nickname), q = normalizeComment(comment);
+  if (!isQuestion(q) || q.split(' ').length > maxWords) return answer;
+  let a = String(answer || '').trim();
+  const lead = new RegExp('^(?:oh |ah |ooh |hmm,? )?' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[,!.]?\\s+', 'i');
+  if (lead.test(a)) { a = a.replace(lead, ''); a = a.charAt(0).toUpperCase() + a.slice(1); }
+  else a = a.replace(new RegExp(',\\s*' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[,.!?])', 'i'), '');  // "Matters of the heart, Ali?" -> "Matters of the heart?" (the name was just said)
+  const qq = /[?.!]$/.test(q) ? q : q + '?';
+  return detectLanguage(q) === 'roman-ur' ? `${name} poochte hain, ${qq} ${a}` : `${name} asks, ${qq} ${a}`;
+}
+
 export function joinNames(names) {
   const n = [...new Set(names.map(spokenName))];
   if (n.length <= 1) return n[0] || 'friend';
@@ -263,7 +297,7 @@ export function joinNames(names) {
 // ---------------------------------------------------------------- LLM (OpenAI-compatible: OpenAI, xAI, OpenRouter, Groq, local)
 export const PERSONA = `You are Mystic Mira, a warm, playful, slightly mysterious anime fortune-teller hosting a TikTok LIVE. You sit at a candle-lit table with a crystal ball and a quill.
 Rules:
-- Reply in 1 to 3 short sentences, at most 45 words, spoken aloud, so no emojis, lists, hashtags or links.
+- Reply in 1 to 2 short sentences, at most 30 words, spoken aloud, so no emojis, lists, hashtags or links.
 - Address the viewer by their name once.
 - Everything is for entertainment. Never state predictions as facts; use playful, hedged wording ("the stars hint", "just for fun").
 - Never ask for private details (full name, parents' names, full date of birth, phone, address) in the public chat. For a full reading, tell them to use the private form in the bio link, get a code, send a Rose and comment the code.

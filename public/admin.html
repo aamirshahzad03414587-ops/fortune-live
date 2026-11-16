@@ -51,7 +51,7 @@
     <div class="row"><div><label>Code</label><input id="sCode" placeholder="A17"></div><div><label>&nbsp;</label><button id="sNew" class="alt">Make demo form entry</button></div></div>
     <label>Gift</label>
     <select id="sGift"><option value="Rose|1">Rose (1)</option><option value="Finger Heart|5">Finger Heart (5)</option><option value="Doughnut|30">Doughnut (30)</option><option value="Hand Hearts|100">Hand Hearts (100)</option><option value="Corgi|299">Corgi (299)</option></select>
-    <button id="sGiftBtn">🎁 Send gift</button><button id="sChat">💬 Comment code</button><button id="sLike" class="alt">❤️ Likes</button><button id="sFollow" class="alt">➕ Follow</button>
+    <button id="sGiftBtn">🎁 Send gift</button><button id="sChat">💬 Comment code</button><button id="sLike" class="alt">❤️ Likes</button><button id="sFollow" class="alt">➕ Follow</button><button id="sJoin" class="alt">👋 Join</button>
     <button id="sDemo">▶ Run 3-viewer demo</button>
     <label>Fake chat comment (Mira replies one by one)</label>
     <div class="row"><input id="sText" value="Hi Mira! Will I find love this year?"><button id="sSay">💬 Send comment</button></div>
@@ -68,6 +68,7 @@
     <div class="row"><div><label>Ask the audience after silence (s, 0 = off)</label><input id="chIdle" type="number" min="0"></div><div><label>Pause between replies (s)</label><input id="chGap" type="number" min="0" step="0.5"></div></div>
     <label><input type="checkbox" id="chGG" style="width:auto"> Thank new gifters</label>
     <label><input type="checkbox" id="chGF" style="width:auto"> Welcome new followers</label>
+    <label><input type="checkbox" id="chGJ" style="width:auto"> Welcome viewers who join (batched, max one welcome every 10 s)</label>
     <label>Custom audience questions (one per line, optional)</label><textarea id="chPrompts" rows="3"></textarea>
     <small>Spam, links and swear words are skipped automatically. Readings always go before chat.</small>
   </div>
@@ -82,7 +83,7 @@
     <label style="margin-top:12px"><input type="checkbox" id="pEnabled" style="width:auto"> Skull prophecy reveal for readings</label>
     <div class="row"><div><label>Tiers that use it (e.g. 1,2,3)</label><input id="pTiers"></div><div><label>Voice starts after (s)</label><input id="pOffset" type="number" step="0.1" min="0"></div><div><label>Lip-sync lead (ms)</label><input id="mLead" type="number" step="5" min="-200" max="200"></div></div>
     <label><input type="checkbox" id="mEnabled" style="width:auto"> Lip-sync mouth (follows her voice)</label>
-    <div class="row"><div><label>Mira animation</label><select id="chMode"><option value="video">Video (generated idle loop + tracked lip sync)</option><option value="still">Still picture (fallback)</option></select></div><div><label>Video quality</label><select id="chQuality"><option value="auto">Auto</option><option value="1080">1080p</option><option value="720">720p</option></select></div></div>
+    <div class="row"><div><label>Mira animation</label><select id="animMode"><option value="rig">Live 2D rig (real-time motion, default)</option><option value="video">Video loop + tracked lip sync</option><option value="still">Still picture (fallback)</option></select></div><div><label>Video quality</label><select id="chQuality"><option value="auto">Auto</option><option value="1080">1080p</option><option value="720">720p</option></select></div></div>
     <label><input type="checkbox" id="bEnabled" style="width:auto"> Breathing (still mode)</label>
   </div>
 
@@ -138,13 +139,13 @@ function fill() {
   $('cTiers').value = c.tiers.map(t => `${t.minDiamonds} | ${t.name} | ${t.level} | ${t.secondsOnScreen}`).join('\n');
   $('oTitle').value = c.overlay.title; $('raw').value = JSON.stringify(c, null, 2);
   const ch = c.chat; $('chEnabled').checked = ch.enabled; $('chMode').value = ch.mode; $('chMax').value = ch.maxQueue; $('chCool').value = ch.userCooldownSeconds;
-  $('chAge').value = ch.maxCommentAgeSeconds; $('chIdle').value = ch.idlePromptSeconds; $('chGap').value = ch.secondsBetweenReplies; $('chGG').checked = ch.greetGifters; $('chGF').checked = ch.greetFollowers;
+  $('chAge').value = ch.maxCommentAgeSeconds; $('chIdle').value = ch.idlePromptSeconds; $('chGap').value = ch.secondsBetweenReplies; $('chGG').checked = ch.greetGifters; $('chGF').checked = ch.greetFollowers; $('chGJ').checked = ch.welcomeJoins !== false;
   $('chPrompts').value = (ch.idlePrompts || []).join('\n');
   const v = c.voice; $('vEnabled').checked = v.enabled; $('vRate').value = v.rate; $('vPitch').value = v.pitch;
   const opts = (sel) => (voices.includes(sel) ? voices : [sel, ...voices]).map(x => `<option ${x === sel ? 'selected' : ''}>${x}</option>`).join('');
   $('vVoice').innerHTML = opts(v.voice); $('vUrdu').innerHTML = opts(v.urduVoice);
   const P = c.overlay.character.prophecy; $('pEnabled').checked = P.enabled; $('pTiers').value = (P.tiers || []).join(','); $('pOffset').value = P.voiceOffset;
-  const CH = c.overlay.character; $('mLead').value = CH.mouth?.leadMs ?? 30; $('mEnabled').checked = CH.mouth?.enabled !== false; $('bEnabled').checked = CH.breathing?.enabled !== false; $('chMode').value = CH.mode || 'video'; $('chQuality').value = CH.video?.quality || 'auto';
+  const CH = c.overlay.character; $('mLead').value = CH.mouth?.leadMs ?? 30; $('mEnabled').checked = CH.mouth?.enabled !== false; $('bEnabled').checked = CH.breathing?.enabled !== false; $('animMode').value = CH.mode || 'rig'; $('chQuality').value = CH.video?.quality || 'auto';
   const L = c.llm; $('lEnabled').checked = L.enabled; $('lBase').value = L.baseUrl; $('lModel').value = L.model; $('lKey').value = L.apiKey;
 }
 function status(t) { const el = $('st'); el.className = 'status ' + t.state; el.textContent = `TikTok: ${t.state}${t.username ? ' @' + t.username : ''}${t.message ? ' · ' + t.message : ''}`; }
@@ -164,6 +165,7 @@ $('sGiftBtn').onclick = async () => { const [giftName, diamonds] = $('sGift').va
 $('sChat').onclick = async () => { const r = await api('/sim/chat', { nickname: $('sNick').value, comment: '#' + $('sCode').value }); log(`${$('sNick').value} commented #${$('sCode').value}: ${r.ok ? 'queued' : r.reason}`); };
 $('sLike').onclick = () => api('/sim/like', { nickname: $('sNick').value, count: 15 });
 $('sFollow').onclick = () => api('/sim/follow', { nickname: $('sNick').value });
+$('sJoin').onclick = () => api('/sim/join', { nickname: $('sNick').value });
 $('sDemo').onclick = async () => {
   const ppl = [['Ayesha Khan', '1998-07-23', 'Rose|1', 'Will I find love this year?'], ['Omar Farooq', '1991-11-29', 'Doughnut|30', 'Should I start a business?'], ['Bilal Ahmed', '1985-12-03', 'Hand Hearts|100', 'What about money in 2026?']];
   for (const [fullName, dob, g, question] of ppl) {
@@ -181,12 +183,12 @@ $('save').onclick = async () => {
   c.tiers = $('cTiers').value.split('\n').map(l => l.split('|').map(s => s.trim())).filter(p => p.length >= 4).map(([m, name, lv, sec]) => ({ minDiamonds: +m, name, level: Math.min(3, Math.max(1, +lv)), secondsOnScreen: +sec }));
   c.overlay.title = $('oTitle').value;
   Object.assign(c.chat, { enabled: $('chEnabled').checked, mode: $('chMode').value, maxQueue: +$('chMax').value || 8, userCooldownSeconds: +$('chCool').value || 0, maxCommentAgeSeconds: +$('chAge').value || 90,
-    idlePromptSeconds: +$('chIdle').value || 0, secondsBetweenReplies: +$('chGap').value || 0, greetGifters: $('chGG').checked, greetFollowers: $('chGF').checked, idlePrompts: $('chPrompts').value.split('\n').map(x => x.trim()).filter(Boolean) });
+    idlePromptSeconds: +$('chIdle').value || 0, secondsBetweenReplies: +$('chGap').value || 0, greetGifters: $('chGG').checked, greetFollowers: $('chGF').checked, welcomeJoins: $('chGJ').checked, idlePrompts: $('chPrompts').value.split('\n').map(x => x.trim()).filter(Boolean) });
   Object.assign(c.voice, { enabled: $('vEnabled').checked, voice: $('vVoice').value, urduVoice: $('vUrdu').value, rate: $('vRate').value || '+0%', pitch: $('vPitch').value || '+0Hz' });
   Object.assign(c.overlay.character.prophecy, { enabled: $('pEnabled').checked, tiers: $('pTiers').value.split(',').map(Number).filter(Boolean), voiceOffset: +$('pOffset').value || 0 });
   c.overlay.character.mouth = { ...(c.overlay.character.mouth || {}), enabled: $('mEnabled').checked, leadMs: Number($('mLead').value) || 0 };
   c.overlay.character.breathing = { ...(c.overlay.character.breathing || {}), enabled: $('bEnabled').checked };
-  c.overlay.character.mode = $('chMode').value; c.overlay.character.video = { ...(c.overlay.character.video || {}), quality: $('chQuality').value };
+  c.overlay.character.mode = $('animMode').value; c.overlay.character.video = { ...(c.overlay.character.video || {}), quality: $('chQuality').value };
   Object.assign(c.llm, { enabled: $('lEnabled').checked, baseUrl: $('lBase').value.trim(), model: $('lModel').value.trim(), apiKey: $('lKey').value.trim() });
   try { const r = await api('/config', c); config = r.config; fill(); $('saved').textContent = 'Saved ✓ (applies immediately)'; } catch (e) { $('saved').textContent = 'Error: ' + e.message; }
 };

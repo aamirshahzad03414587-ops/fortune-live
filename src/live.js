@@ -3,7 +3,7 @@
 // Events: 'reveal' (reading), 'say' (reply/greet/prompt), 'queue', 'chatQueue', 'toast', 'gift', 'like', 'follow', 'idle', 'skip'
 import { EventEmitter } from 'node:events';
 import { computeReading, liveReading } from './numerology.js';
-import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm } from './chat.js';
+import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm, isQuestion, withQuestion, welcomeNames } from './chat.js';
 
 export const CODE_RE = /(?:^|[^A-Z0-9])#?([A-HJ-NP-Z]\d{2,4})(?![0-9])/gi;
 export function extractCodes(comment) {
@@ -12,8 +12,10 @@ export function extractCodes(comment) {
   return out;
 }
 
-const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 60, maxQueue: 8, maxCommentAgeSeconds: 90, secondsBetweenReplies: 1.5,
-  idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 20, maxReplyWords: 45 };
+const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 1,
+  idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 35,
+  // viewers joining the LIVE: batched ("Welcome Ali, Sara and 3 others!"), at most one welcome every joinGreetSeconds
+  welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 3, readQuestionAloud: true };
 const VOICE_DEFAULTS = { readingSpeechStart: 3, talkSpeechStart: 0.5, tailSeconds: 1.2 };
 
 export const estimateSpeechSeconds = (text) => Math.max(1.5, String(text).split(/\s+/).length / 2.6);
@@ -31,13 +33,15 @@ export class LiveEngine extends EventEmitter {
 
   /** Reset per-stream counters (on connect or from the admin panel). */
   newStream() {
-    clearTimeout(this.timer); clearTimeout(this.idleTimer);
+    clearTimeout(this.timer); clearTimeout(this.idleTimer); clearTimeout(this.welcomeTimer);
     this.credits = new Map(); this.pendingCodes = new Map(); this.readingsByUser = new Map();
     this.queue = []; this.chatQueue = []; this.current = null; this.busy = false;
     this.gifters = new Set(); this.lastReplyAt = new Map(); this.lastGreetAt = new Map();
     this.pendingGiftGreets = []; this.pendingFollowGreets = []; this.lastGreetTime = 0;
+    this.pendingJoins = []; this.welcomed = new Set(); this.lastWelcomeTime = -1e12;
+    this.prepared = new Map(); // chat id -> Promise<{ text, source, sp }> (reply + voice made while she is still talking)
     this.lastActivity = 0;
-    this.stats = { gifts: 0, diamonds: 0, likes: 0, follows: 0, readings: 0, replies: 0, startedAt: this.now() };
+    this.stats = { gifts: 0, diamonds: 0, likes: 0, follows: 0, joins: 0, welcomes: 0, readings: 0, replies: 0, startedAt: this.now() };
     this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue);
   }
 
@@ -97,6 +101,36 @@ export class LiveEngine extends EventEmitter {
   handleLike(l) { this.touch(); this.stats.likes += l.count || 1; this.emit('like', l); }
   handleFollow(f) { this.touch(); this.stats.follows++; this.emit('follow', f); this.queueGreeting('follow', f); }
 
+  /** A viewer joined the LIVE (TikTok "member" event). Each person is welcomed once per stream, in batches. */
+  handleJoin(u) {
+    this.touch(); this.stats.joins++;
+    const C = this.chatCfg;
+    if (!C.enabled || !C.welcomeJoins) return { ok: false, reason: 'welcome-off' };
+    const id = String(u.userId || u.uniqueId || u.nickname || '');
+    if (!id || this.welcomed.has(id)) return { ok: false, reason: 'already-welcomed' };
+    this.welcomed.add(id);
+    this.pendingJoins.push({ userId: id, nickname: u.nickname || u.uniqueId || 'friend', at: this.now() });
+    if (this.pendingJoins.length > 80) this.pendingJoins.splice(0, this.pendingJoins.length - 80);
+    this.pump();
+    return { ok: true };
+  }
+
+  /** Seconds until the next batched welcome may be spoken (0 = now, null = nobody waiting). */
+  welcomeWait() {
+    if (!this.pendingJoins.length) return null;
+    const C = this.chatCfg;
+    const every = C.joinGreetSeconds * (this.chatQueue.length > 3 ? 2 : 1) * 1000;
+    return Math.max(0, this.lastWelcomeTime + every - this.now(), this.pendingJoins[0].at + C.joinBatchSeconds * 1000 - this.now()) / 1000;
+  }
+
+  takeWelcome() {
+    const people = this.pendingJoins; this.pendingJoins = [];
+    this.lastWelcomeTime = this.now(); this.stats.welcomes++;
+    const names = people.map((p) => p.nickname);
+    const shown = welcomeNames(names, this.chatCfg.joinMaxNames);
+    return { kind: 'say', sub: 'welcome', text: this.replies.welcome(names, this.chatCfg.joinMaxNames), caption: { icon: '👋', title: 'Welcome!', text: shown }, count: people.length };
+  }
+
   // ------------------------------------------------------------------ chat queue
   enqueueChat(c) {
     const C = this.chatCfg;
@@ -111,12 +145,19 @@ export class LiveEngine extends EventEmitter {
     const last = this.lastReplyAt.get(c.userId) || 0;
     if (this.now() - last < C.userCooldownSeconds * 1000) return { ok: false, reason: 'cooldown' };
     if (this.chatQueue.some((q) => q.userId === c.userId)) return { ok: false, reason: 'already-queued' };
+    const question = isQuestion(c.comment);
+    if (this.chatQueue.length >= C.maxQueue && question) {
+      // a question gets in by pushing out the oldest plain comment ("hi", "nice")
+      const drop = this.chatQueue.findIndex((q) => !q.question);
+      if (drop >= 0) this.chatQueue.splice(drop, 1);
+    }
     if (this.chatQueue.length >= C.maxQueue) return { ok: false, reason: 'chat-queue-full' };
-    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).trim().slice(0, 200), at: this.now(), isGifter, isFollower };
+    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).trim().slice(0, 200), at: this.now(), isGifter, isFollower, question };
     this.chatQueue.push(item);
     this.lastReplyAt.set(c.userId, this.now()); // cooldown counts from when we accepted the comment
     this.emit('chatQueue', this.chatQueue);
     this.pump();
+    this.prefetch();
     return { ok: true, chat: item };
   }
 
@@ -171,12 +212,14 @@ export class LiveEngine extends EventEmitter {
     const dueNow = (list) => list.some((p) => p.due <= this.now());
     if (greetDue && dueNow(this.pendingGiftGreets)) {
       const people = this.pendingGiftGreets.filter((p) => p.due <= this.now()); this.pendingGiftGreets = this.pendingGiftGreets.filter((p) => p.due > this.now()); const gifts = [...new Set(people.map((p) => p.gift))];
-      return { kind: 'say', sub: 'greet', text: this.replies.greetGift(people.map((p) => p.nickname), gifts.length === 1 ? gifts[0] : 'gifts') };
+      return { kind: 'say', sub: 'greet', text: this.replies.greetGift(people.map((p) => p.nickname), gifts.length === 1 ? gifts[0] : 'gifts'),
+        caption: { icon: '🎁', title: 'Thank you!', text: `${welcomeNames(people.map((p) => p.nickname), 3)} · ${gifts.length === 1 ? gifts[0] : 'gifts'}` } };
     }
     if (greetDue && dueNow(this.pendingFollowGreets)) {
       const people = this.pendingFollowGreets.filter((p) => p.due <= this.now()); this.pendingFollowGreets = this.pendingFollowGreets.filter((p) => p.due > this.now());
-      return { kind: 'say', sub: 'greet', text: this.replies.greetFollow(people.map((p) => p.nickname)) };
+      return { kind: 'say', sub: 'greet', text: this.replies.greetFollow(people.map((p) => p.nickname)), caption: { icon: '💫', title: 'New follower', text: welcomeNames(people.map((p) => p.nickname), 3) } };
     }
+    if (this.welcomeWait() === 0) return this.takeWelcome();
     while (this.chatQueue.length) {
       const c = this.chatQueue.shift();
       this.emit('chatQueue', this.chatQueue);
@@ -195,6 +238,8 @@ export class LiveEngine extends EventEmitter {
         const wait = Math.max(50, Math.min(...pend.map((p) => p.due)) - this.now(), this.chatCfg.greetCooldownSeconds * 1000 - (this.now() - this.lastGreetTime));
         clearTimeout(this.greetTimer); this.greetTimer = setTimeout(() => this.pump(), wait); this.greetTimer.unref?.();
       }
+      const ww = this.welcomeWait();
+      if (ww != null) { clearTimeout(this.welcomeTimer); this.welcomeTimer = setTimeout(() => this.pump(), Math.max(50, ww * 1000)); this.welcomeTimer.unref?.(); }
       this.scheduleIdlePrompt(); return;
     }
     clearTimeout(this.idleTimer);
@@ -229,6 +274,21 @@ export class LiveEngine extends EventEmitter {
     return { text: this.replies.reply(chat.comment, chat).text, source: 'rules' };
   }
 
+  /** Make the next replies (text + voice) in the background so there is no pause between answers. */
+  prefetch() {
+    const live = new Set(this.chatQueue.map((c) => c.id));
+    for (const id of this.prepared.keys()) if (!live.has(id)) this.prepared.delete(id);
+    for (const c of this.chatQueue.slice(0, this.chatCfg.prefetchReplies ?? 2)) if (!this.prepared.has(c.id)) this.prepared.set(c.id, this.prepareReply(c));
+  }
+
+  async prepareReply(chat) {
+    try {
+      let { text, source } = await this.makeReply(chat);
+      if (this.chatCfg.readQuestionAloud) text = withQuestion(chat.nickname, chat.comment, text);
+      return { text, source, sp: await this.speech(text) };
+    } catch { return null; }
+  }
+
   async speech(text) {
     let audio = null;
     if (this.tts) { try { audio = await this.tts.synth(text); } catch { audio = null; } }
@@ -252,15 +312,22 @@ export class LiveEngine extends EventEmitter {
       return;
     }
     // say: reply / greet / prompt / admin
-    let text = job.text, source = 'rules';
-    if (job.sub === 'reply') ({ text, source } = await this.makeReply(job.chat));
-    const sp = await this.speech(text);
+    let text = job.text, source = 'rules', sp = null;
+    if (job.sub === 'reply') {
+      const pre = this.prepared.get(job.chat.id); this.prepared.delete(job.chat.id);
+      const r = (pre && (await pre)) || (await this.prepareReply(job.chat));
+      if (r) ({ text, source, sp } = r);
+      else { text = this.replies.reply(job.chat.comment, job.chat).text; }
+    }
+    if (!sp) sp = await this.speech(text);
+    sp = { ...sp };
     sp.start = V.talkSpeechStart;
     const total = Math.max(V.minSaySeconds ?? 3, sp.start + sp.duration + V.tailSeconds);
-    this.current = { id: `s${this.now()}`, kind: 'say', sub: job.sub, text, source, comment: job.chat ? { nickname: job.chat.nickname, text: job.chat.comment } : null, speech: sp, seconds: Math.round(total * 10) / 10 };
+    this.current = { id: `s${this.now()}`, kind: 'say', sub: job.sub, text, source, comment: job.chat ? { nickname: job.chat.nickname, text: job.chat.comment } : null, caption: job.caption || null, speech: sp, seconds: Math.round(total * 10) / 10 };
     if (job.sub === 'reply') this.stats.replies++;
     if (job.sub === 'greet') this.lastGreetTime = this.now();
     this.emit('say', this.current);
+    this.prefetch();
     this.timer = setTimeout(() => this.finishCurrent(), (total + (this.chatCfg.secondsBetweenReplies || 0)) * 1000);
   }
 

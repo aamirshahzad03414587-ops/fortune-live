@@ -4,7 +4,7 @@
   const root = $('root');
   // ?render=1: the page runs on a virtual clock driven by window.__render (frame-accurate demo / measurements).
   const renderMode = qs.get('render') === '1';
-  const VT = { now: 0, timers: [], id: 0 };
+  const VT = { now: 0, timers: [], id: 0, pending: [] };
   const setTimeout = renderMode ? (fn, ms = 0) => { const id = ++VT.id; VT.timers.push({ id, at: VT.now + Math.max(0, ms || 0), fn }); return id; } : window.setTimeout.bind(window);
   const clearTimeout = renderMode ? (id) => { VT.timers = VT.timers.filter((t) => t.id !== id); } : window.clearTimeout.bind(window);
   const performance = renderMode ? { now: () => VT.now } : window.performance;
@@ -41,7 +41,8 @@
   const vid = $('baseVid'), pTrack = $('pTrack'), sceneTrack = $('sceneTrack');
   const charBox = $('charBox'), scene = $('scene'), sc = scene.getContext('2d'), mist = $('mist'), mx = mist.getContext('2d');
   const DEFAULT_CHAR = {
-    mode: 'video',
+    mode: 'rig',
+    rig: { base: '/assets/rig/', image: '/assets/mira2.jpg' },
     video: { src: '/assets/mira2-idle-loop-1080.mp4', src720: '/assets/mira2-idle-loop-720.mp4', quality: 'auto', track: '/assets/mira2-idle-loop.track.json', poster: '/assets/mira2v-poster.jpg',
       mouthImages: ['/assets/mira2v-mouth-o.png', '/assets/mira2v-mouth-e.png', '/assets/mira2v-mouth-a.png'],
       closedImage: '/assets/mira2v-mouth-x.png', toneMatch: true },
@@ -56,6 +57,8 @@
     prophecy: { enabled: true, eyes: [{ x: 15.8, y: 55.4 }, { x: 20.3, y: 55.0 }], eyeSize: 3.6, skull: { x: 14.8, y: 55.6 } },
   };
   const ID = [1, 0, 0, 0, 1, 0];
+  /** Rig mode: the live puppet (null in video / still mode). */
+  const Rig = { api: null, gesture(kind, o) { if (this.api) this.api.gesture(kind, o); } };
   /** Video mode state: the track and the loop frame currently on screen. */
   const Vid = { on: false, track: null, idx: 0, frames: 1, lastMedia: -1, rvfc: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
     A(kind) { const t = this.track; return t ? t[kind][this.idx] || ID : ID; } };
@@ -63,13 +66,14 @@
     mode: 'loading', inited: false, kind: 'still',
     get c() {
       const u = cfg.overlay.character || {}, d = DEFAULT_CHAR, pick = (k) => ({ ...d[k], ...(u[k] && typeof u[k] === 'object' ? u[k] : {}) });
-      return { ...d, ...u, video: pick('video'), breathing: pick('breathing'), mouth: pick('mouth'), ball: pick('ball'), prophecy: pick('prophecy'),
+      return { ...d, ...u, rig: pick('rig'), video: pick('video'), breathing: pick('breathing'), mouth: pick('mouth'), ball: pick('ball'), prophecy: pick('prophecy'),
         candles: u.candles || d.candles, lanterns: u.lanterns || d.lanterns, incense: u.incense || d.incense };
     },
     init() {
       if (this.inited) return; this.inited = true;
       const c = this.c, want = qs.get('mode') || c.mode;
-      if (want === 'video' && c.video.src) this.initVideo().catch((e) => { logEv('video-failed', { err: String(e && e.message || e) }); this.initStill(); });
+      if (want === 'rig') this.initRig().catch((e) => { logEv('rig-failed', { err: String(e && e.message || e) }); console.warn('rig failed', e); this.initStill(); });
+      else if (want === 'video' && c.video.src) this.initVideo().catch((e) => { logEv('video-failed', { err: String(e && e.message || e) }); this.initStill(); });
       else this.initStill();
     },
     /** Picks the 720p file when the overlay is drawn small (landscape, small browser sources). */
@@ -100,6 +104,21 @@
       Vid.on = true; this.mouthOk = this.c.mouth.enabled !== false; mouthEl.hidden = !this.mouthOk;
       vid.classList.add('on');
       this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'video' });
+    },
+    /** Rig mode (default): her painting as a real-time 2D puppet (public/rig.js). Effects use the still's coordinates. */
+    async initRig() {
+      const r = this.c.rig;
+      if (!window.MiraRig) throw new Error('rig.js not loaded');
+      this.kind = 'rig'; Vid.on = false;
+      still.src = r.image; bodyImg.removeAttribute('src'); $('bgBlur').style.backgroundImage = `url("${r.image}")`;
+      this.aspect = DEFAULT_CHAR.width / DEFAULT_CHAR.height;
+      Rig.api = await MiraRig.create(charBox, { base: r.base, image: r.image, preserve: renderMode, seed: 11,
+        onLost: () => { logEv('rig-lost'); Rig.api = null; root.classList.remove('rigMode'); this.inited = false; this.init(); } });
+      charBox.insertBefore(Rig.api.canvas, $('warm'));
+      root.classList.add('rigMode');
+      layoutChar(); this.build();
+      this.mouthOk = false; mouthEl.hidden = true;
+      this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'rig' });
     },
     initStill() {
       const c = this.c; this.kind = 'still'; Vid.on = false; root.classList.remove('videoMode'); vid.removeAttribute('src'); vid.classList.remove('on');
@@ -192,6 +211,7 @@
     let w = W, h = W / a; if (h < H) { h = H; w = H * a; }
     Object.assign(charBox.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
     for (const c of [scene, mist]) { c.width = Math.round(w); c.height = Math.round(h); }
+    if (Rig.api) Rig.api.resize(w, h);
     sp.width = W; sp.height = H;
     if (Vid.on) applyTrack();
   }
@@ -250,14 +270,19 @@
     const lt = Lip.clock ? Lip.clock() : null;
     Mouth.set(lt == null ? 0 : LipSync.at(Lip.track, lt + (c.mouth.leadMs ?? 30) / 1000));
     Mouth.step(dt, lt != null);
+    if (Rig.api) {
+      const sh = lt == null ? null : LipSync.shapeAt(Lip.track, lt + (c.mouth.leadMs ?? 30) / 1000);
+      Rig.api.frame(now, { speaking: lt != null, shape: sh ? sh.shape : 'rest', open: sh ? sh.open : 0, mood: Char.mode === 'prophecy' ? 'prophecy' : 'neutral' });
+      if (window.__rigLog) window.__rigLog.push({ t: lt, shape: sh && sh.shape, eye: Rig.api.state.eye });
+    }
     // breathing (still mode only; the video breathes by itself): her body copy and the mouth move together
-    if (!video && c.breathing.enabled !== false) {
+    if (!video && !Rig.api && c.breathing.enabled !== false) {
       const b = (1 - Math.cos((2 * Math.PI * t) / (c.breathing.seconds || 4.6))) / 2, a = c.breathing.amount ?? 0.0045;
       const tf = `translateY(${(-a * 0.25 * b * 100).toFixed(4)}%) scale(${(1 + a * 0.35 * b).toFixed(5)}, ${(1 + a * b).toFixed(5)})`;
       body.style.transform = tf; mouthWrap.style.transform = tf;
     }
     // candles, lanterns, crystal ball
-    const open = Mouth.open, ballLvl = proOn ? 1.9 : 1 + open * 0.35;
+    const open = Rig.api ? Rig.api.mouthOpen : Mouth.open, ballLvl = proOn ? 1.9 : 1 + open * 0.35;
     for (const g of Char.glows || []) {
       if (g.cls === 'ball') {
         const base = video ? (proOn ? 0.75 : 0.12 + 0.35 * open) : (0.42 + 0.12 * Math.sin(t * 1.3)) * ballLvl;
@@ -374,8 +399,10 @@
         timer = setTimeout(() => endFn('browser-timeout'), (ctl.duration + 6) * 1000);
       } catch { silent(); }
     };
+    if (renderMode) VT.pending.push(trackP);
     setTimeout(async () => {
       if (stopped) return;
+      if (renderMode) { window.__audioLog = (window.__audioLog || []).concat({ url: s.url, vt: performance.now() }); return silent(); }  // demo renderer: virtual clock, audio mixed afterwards
       if (!s.url) return browser();
       // wait (briefly) for the lip track so the mouth is right from the first syllable
       const r = await Promise.race([trackP, sleep(1200).then(() => null)]);
@@ -457,6 +484,7 @@
     const s = item.speech || { text: item.sentences.join(' '), duration: item.seconds - 4, start: 3 };
     const startMs = (s.start ?? 3) * 1000;
     if (item.prophecy) Char.prophecy(); else if (Char.mode === 'prophecy') Char.idle();
+    Rig.gesture('think', { seconds: Math.max(2, (s.start ?? 3) - 0.3) });
     const ctl = playSpeech(s, startMs);
     ctl.ended.then(() => { if (curSpeech === ctl || !curSpeech) setTimeout(() => { if (!Lip.clock) Char.idle(); }, 700); });
     later(600, () => panels({ top: true }));
@@ -470,11 +498,18 @@
     clearLater(); logEv('say', { id: item.id, sub: item.sub });
     if (Char.mode === 'prophecy') Char.idle();
     const s = item.speech || { text: item.text, duration: 3, start: 0.5 };
-    if (item.comment && cfg.overlay.showChat !== false) {
-      $('cbAvatar').textContent = (item.comment.nickname || '?').replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase() || '★';
-      $('cbName').textContent = '@' + item.comment.nickname; $('cbText').textContent = item.comment.text;
-    }
-    panels({ box: true, solo: true, bubble: !!item.comment && cfg.overlay.showChat !== false });
+    const cap = item.comment ? { icon: (item.comment.nickname || '?').replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase() || '★', title: '@' + item.comment.nickname, text: item.comment.text }
+      : item.caption || null;
+    const showCap = !!cap && cfg.overlay.showChat !== false;
+    if (showCap) { $('cbAvatar').textContent = cap.icon || '✦'; $('cbName').textContent = cap.title || ''; $('cbText').textContent = cap.text || ''; }
+    $('commentBubble').classList.toggle('isQuestion', !!item.comment);
+    panels({ box: true, solo: true, bubble: showCap });
+    // body language: she reads the question first (head tilt, brows up), nods hello, smiles at thank-yous
+    const lead = (s.start ?? 0.5);
+    if (item.sub === 'reply') Rig.gesture('listen', { seconds: lead + 0.5 });
+    else if (item.sub === 'welcome') { Rig.gesture('nod'); Rig.gesture('happy', { seconds: 0.9 }); }
+    else if (item.sub === 'greet') { Rig.gesture('happy', { seconds: 1.9 }); Rig.gesture('nod', { amp: 0.7 }); }
+    else Rig.gesture('brow');
     $('readingText').innerHTML = '';
     const startMs = (s.start ?? 0.5) * 1000;
     const ctl = playSpeech(s, startMs);
@@ -540,7 +575,7 @@
       else if (m.type === 'say') say(m.item);
       else if (m.type === 'skip') skip();
       else if (m.type === 'toast') toast(m.text, m.kind);
-      else if (m.type === 'gift') toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3);
+      else if (m.type === 'gift') { Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
       else if (m.type === 'like') hearts(Math.ceil((m.count || 1) / 3));
       else if (m.type === 'follow' && cfg.overlay.showFollowToasts !== false) toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
     };
@@ -567,10 +602,10 @@
   $('pTalk').onclick = () => say({ id: 'local2', sub: 'reply', text: 'Hello my dear, the stars are glowing for you tonight.', comment: { nickname: 'tester', text: 'hi Mira!' }, speech: { text: 'Hello my dear, the stars are glowing for you tonight.', duration: 4, start: 0.5 }, seconds: 6 });
   if (qs.get('panel') === '1') panel.hidden = false;
 
-  window.__diag = () => ({ kind: Char.kind, videoFrame: Vid.idx, videoSrc: vid.currentSrc ? vid.currentSrc.replace(location.origin, '') : null, rvfc: Vid.rvfc, mode: Char.mode, mouthOk: !!Char.mouthOk, viseme: Mouth.target, lipSource: Lip.source, speaking: !!Lip.clock,
+  window.__diag = () => ({ kind: Char.kind, rig: Rig.api ? { eye: Rig.api.state.eye, mouth: Rig.api.state.mouth.cur } : null, videoFrame: Vid.idx, videoSrc: vid.currentSrc ? vid.currentSrc.replace(location.origin, '') : null, rvfc: Vid.rvfc, mode: Char.mode, mouthOk: !!Char.mouthOk, viseme: Mouth.target, lipSource: Lip.source, speaking: !!Lip.clock,
     prophecyOn: proph.classList.contains('on'), prophecyOpacity: getComputedStyle(proph).opacity, speech: curSpeech ? curSpeech.how : null,
     charBox: { w: charBox.clientWidth, h: charBox.clientHeight } });
-  window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync };
+  window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync, Rig };
   // Frame-accurate renderer (?render=1): virtual clock for timers, CSS animations, lips and the video frame.
   const animBase = new WeakMap();
   window.__render = {
@@ -582,6 +617,7 @@
       VT.now = ms;
       for (;;) { const due = VT.timers.filter((t) => t.at <= ms).sort((x, y) => x.at - y.at)[0]; if (!due) break; VT.timers = VT.timers.filter((t) => t !== due); try { due.fn(); } catch (e) { console.error(e); } await 0; }
       await new Promise((r) => window.setTimeout(r, 0));          // let async work (track decode, awaits) settle
+      while (VT.pending.length) { await Promise.all(VT.pending.splice(0)); await new Promise((r) => window.setTimeout(r, 0)); }
       if (speechT !== undefined) { Lip.track = this.track; Lip.clock = speechT == null ? null : () => speechT; }
       for (const an of document.getAnimations()) { if (!animBase.has(an)) animBase.set(an, ms); an.pause(); an.currentTime = ms - animBase.get(an); }
       if (Vid.on) {

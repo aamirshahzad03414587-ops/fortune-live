@@ -124,7 +124,8 @@ admin.post('/test-llm', async (req, res) => {
 });
 admin.post('/test-tts', async (req, res) => { const r = await tts.synth(req.body.text || 'Hello, I am Mystic Mira.'); res.json(r ? { ok: true, ...r } : { ok: false, error: tts.lastError || 'TTS disabled' }); });
 admin.post('/sim/like', (req, res) => { live.handleLike({ nickname: req.body.nickname || 'Viewer', count: Number(req.body.count || 10) }); res.json({ ok: true }); });
-admin.post('/sim/follow', (req, res) => { live.handleFollow({ nickname: req.body.nickname || 'Viewer' }); res.json({ ok: true }); });
+admin.post('/sim/follow', (req, res) => { live.handleFollow({ userId: req.body.userId || 'sim_' + (req.body.nickname || 'viewer'), nickname: req.body.nickname || 'Viewer' }); res.json({ ok: true }); });
+admin.post('/sim/join', (req, res) => { const n = String(req.body.nickname || 'Viewer').slice(0, 40); res.json(live.handleJoin({ userId: req.body.userId || 'sim:' + n, nickname: n })); });
 admin.post('/sim/submission', (req, res) => {
   // creates a demo form submission and returns its code
   const rec = store.create({ fullName: req.body.fullName || 'Ayesha Khan', dob: req.body.dob || '1998-07-23', motherName: req.body.motherName || '', fatherName: req.body.fatherName || '', question: req.body.question || 'Will I find love this year?' }, config.data.retentionHours);
