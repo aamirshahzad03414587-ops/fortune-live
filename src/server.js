@@ -17,7 +17,6 @@ const tts = new TTS(() => config.voice);
 const live = new LiveEngine({ config, store, tts });
 live.on('log', (m) => console.log('[mira]', m));
 const tiktok = new TikTokBridge(live);
-tiktok.signApiKey = process.env.SIGN_API_KEY || config.tiktok.signApiKey || '';
 setInterval(() => { const n = store.purgeExpired(); if (n) console.log(`[data] auto-deleted ${n} expired submission(s)`); }, 5 * 60e3).unref();
 
 const app = express();
@@ -97,8 +96,8 @@ admin.post('/config', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 admin.post('/connect', async (req, res) => {
-  try { const u = req.body.username || config.tiktok.username; res.json(await tiktok.connect(u)); }
-  catch (e) { res.status(400).json({ error: e.message }); }
+  try { await tiktok.connect(); res.json(tiktok.status); }
+  catch (e) { res.status(400).json({ error: e.message, tiktok: tiktok.status }); }
 });
 admin.post('/disconnect', async (req, res) => { await tiktok.disconnect(); res.json(tiktok.status); });
 admin.post('/new-stream', (req, res) => { live.newStream(); res.json({ ok: true }); });
@@ -152,7 +151,27 @@ function broadcastState() { broadcast(statePayload()); }
 wss.on('connection', (ws) => {
   send(ws, statePayload());
   if (live.current) send(ws, live.current.kind === 'reading' ? { type: 'reveal', item: live.current } : { type: 'say', item: live.current });
-  ws.on('message', (raw) => { try { const m = JSON.parse(raw); if (m.type === 'revealDone' && live.current && m.id === live.current.id) { /* timer-driven; ignore */ } } catch {} });
+  ws.on('message', (raw) => {
+    try {
+      const m = JSON.parse(raw);
+      if (m.type === 'revealDone' && live.current && m.id === live.current.id) { /* timer-driven; ignore */ }
+      else if (m.type === 'tikfinityStatus') {
+        ws.fromTikFinity = true;
+        const state = m.state === 'live' ? 'connected' : (m.state || 'connecting');
+        tiktok.setStatus(state, m.message || '', { username: m.username || tiktok.status.username || '' });
+      } else if (m.type === 'tikfinity') {
+        ws.fromTikFinity = true;
+        tiktok.ingest(m.event);
+      }
+    } catch {}
+  });
+  ws.on('close', () => {
+    if (!ws.fromTikFinity) return;
+    const still = [...wss.clients].some((c) => c !== ws && c.fromTikFinity && c.readyState === 1);
+    if (!still && tiktok.status.state !== 'waiting') {
+      tiktok.setStatus('waiting', 'Open the overlay on the streaming PC with TikFinity running (ws://127.0.0.1:21213/)');
+    }
+  });
 });
 live.on('reveal', (item) => broadcast({ type: 'reveal', item }));
 live.on('say', (item) => broadcast({ type: 'say', item }));
@@ -177,6 +196,6 @@ server.listen(config.port, () => {
   console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay${k ? k + '&' : '?'}layout=landscape`);
   console.log(`   Control panel + simulator:        ${base}/admin${k}`);
   if (!config.adminKey) console.log('   (No adminKey set: overlay and admin only open on this PC. Set "adminKey" in config.json before hosting online.)');
+  console.log('   LIVE events come from the TikFinity desktop app on the streaming PC (ws://127.0.0.1:21213/). This server never connects to TikTok.');
   console.log('');
-  if (config.tiktok.autoConnect && config.tiktok.username) tiktok.connect(config.tiktok.username).catch((e) => console.log('[tiktok]', e.message));
 });

@@ -568,12 +568,39 @@
     Char.init(); Char.build();
   }
 
+  // ------------------------------------------------------------ TikFinity (local) → server
+  // The overlay runs on the streaming PC, so it can hear TikFinity at ws://127.0.0.1:21213/
+  // and forward those events over the existing /ws connection. The server never talks to TikTok.
+  let serverWs = null;
+  function forwardTikFinity(ev) {
+    if (!ev || ev.type === 'viewers' || ev.type === 'share') return;
+    if (!serverWs || serverWs.readyState !== 1) return;
+    if (ev.type === 'status') {
+      const state = ev.mode === 'live' ? 'connected' : (ev.mode || 'connecting');
+      serverWs.send(JSON.stringify({ type: 'tikfinityStatus', state, message: ev.message || '', username: ev.username || '' }));
+      return;
+    }
+    serverWs.send(JSON.stringify({ type: 'tikfinity', event: ev }));
+  }
+  function startTikFinity() {
+    if (typeof TikFinity === 'undefined') return;
+    TikFinity.setSink(forwardTikFinity);
+    TikFinity.connect();
+  }
+
   // ------------------------------------------------------------ server connection
   function connect() {
     const key = qs.get('key');
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${key ? '?key=' + encodeURIComponent(key) : ''}`);
-    ws.onopen = () => $('conn').classList.add('ok');
-    ws.onclose = () => { $('conn').classList.remove('ok'); setTimeout(connect, 2000); };
+    serverWs = ws;
+    ws.onopen = () => {
+      $('conn').classList.add('ok');
+      startTikFinity();
+      if (typeof TikFinity !== 'undefined' && TikFinity.state === 'live') {
+        forwardTikFinity({ type: 'status', mode: 'live', message: 'TikFinity connected' });
+      }
+    };
+    ws.onclose = () => { if (serverWs === ws) serverWs = null; $('conn').classList.remove('ok'); setTimeout(connect, 2000); };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'state') { applyConfig(m); lastQueue = m.queue || []; lastChat = m.chatQueue || []; renderQueue(); }
@@ -611,7 +638,7 @@
   $('pTalk').onclick = () => say({ id: 'local2', sub: 'reply', text: 'Hello my dear, the stars are glowing for you tonight.', comment: { nickname: 'tester', text: 'hi Mira!' }, speech: { text: 'Hello my dear, the stars are glowing for you tonight.', duration: 4, start: 0.5 }, seconds: 6 });
   if (qs.get('panel') === '1') panel.hidden = false;
 
-  window.__diag = () => ({ kind: Char.kind, rig: Rig.api ? { eye: Rig.api.state.eye, mouth: Rig.api.state.mouth.cur } : null, videoFrame: Vid.idx, videoSrc: vid.currentSrc ? vid.currentSrc.replace(location.origin, '') : null, rvfc: Vid.rvfc, mode: Char.mode, mouthOk: !!Char.mouthOk, viseme: Mouth.target, lipSource: Lip.source, speaking: !!Lip.clock,
+  window.__diag = () => ({ tikfinity: typeof TikFinity === 'undefined' ? null : { state: TikFinity.state, url: TikFinity.url, count: TikFinity.count }, kind: Char.kind, rig: Rig.api ? { eye: Rig.api.state.eye, mouth: Rig.api.state.mouth.cur } : null, videoFrame: Vid.idx, videoSrc: vid.currentSrc ? vid.currentSrc.replace(location.origin, '') : null, rvfc: Vid.rvfc, mode: Char.mode, mouthOk: !!Char.mouthOk, viseme: Mouth.target, lipSource: Lip.source, speaking: !!Lip.clock,
     prophecyOn: proph.classList.contains('on'), prophecyOpacity: getComputedStyle(proph).opacity, speech: curSpeech ? curSpeech.how : null,
     charBox: { w: charBox.clientWidth, h: charBox.clientHeight } });
   window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync, Rig };

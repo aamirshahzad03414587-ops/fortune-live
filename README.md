@@ -19,8 +19,8 @@ An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime for
 | LIVE overlay | `/overlay` (1080×1920) and `/overlay?layout=landscape` (1920×1080) | Animated Mira (a looping generated idle video with a face-tracked lip-sync mouth driven by her real voice, plus a skull "prophecy" reveal; a still-picture mode is kept as a fallback), her voice, subtitles, comment bubble, queue, hearts, gift and follow messages, and the "for entertainment" footer. |
 | Mira's voice | `src/tts.js` | Free Microsoft Edge neural voices (en-US-AvaNeural at +2% speed, +6% pitch by default: a bright young-adult woman, median pitch about 216 Hz; Urdu ur-PK-UzmaNeural). The server makes an MP3 and the overlay plays it, so it **works inside OBS**. |
 | Mira's brain | `src/chat.js` | Comment filters (spam, links, swear words), built-in reply engine (greetings, love, money, career, health, birthdays, thanks, "who are you", Roman Urdu), or optional AI replies with any OpenAI-compatible API key. |
-| Control panel | `/admin` | Connect TikTok, simulator, queue controls (pause/skip/clear), limits editor, delete all data. |
-| TikTok bridge | `src/tiktok.js` | Uses the `tiktok-live-connector` package to read gifts, comments, likes and follows. |
+| Control panel | `/admin` | TikFinity setup, simulator, queue controls (pause/skip/clear), limits editor, delete all data. |
+| LIVE events | `public/tikfinity.js`, `src/tiktok.js` | The overlay listens to the TikFinity desktop app on the streaming PC (`ws://127.0.0.1:21213/`) and forwards gifts, comments, likes, follows and joins to the server. The server never connects to TikTok. |
 | Limits | `config.json` (or the control panel) | Trigger gift, minimum coins, tiers, per-viewer limits, queue size, seconds on screen, data retention. |
 
 ---
@@ -58,13 +58,21 @@ An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime for
 6. Open the overlay in **only one** place with sound (OBS), so her voice doesn't play twice. If you also open it in a Chrome tab, untick "Play Mira's voice" there (press C).
 
 ### TikTok LIVE Studio
-Add a source → **Link / Browser source** (the name varies by version) → paste the same overlay URL and set the size as above. If your LIVE Studio version has no browser source, stream from OBS instead. Use TikTok's stream key (if your account has one) or the "OBS virtual camera" or window capture.
+Add a source → **Link / Browser source** (the name varies by version) → paste the overlay URL and set the size to **1080 × 1920**. If your LIVE Studio version has no browser source, stream from OBS instead (window capture or virtual camera). Go live only from LIVE Studio — don't stream to TikTok with a stream key from another tool.
 
-### Connect to your LIVE
-1. Start your LIVE first (phone or LIVE Studio).
-2. In the control panel, type your TikTok username (without @) and click **Connect**. Its status turns green.
-3. Connecting starts a "new stream": per-viewer reading counts reset. You can also click **Reset counters**.
-4. To connect automatically when the app starts, set `"username"` and `"autoConnect": true` in `config.json`.
+### Connect TikFinity (required for likes, comments and gifts)
+The game never talks to TikTok from the server. The overlay, running on your streaming PC, reads live events from the **TikFinity desktop app**.
+
+1. Install the TikFinity **desktop app** from <https://tikfinity.zerody.one/> (the website alone is not enough).
+2. Open it and connect by **username** — don't sign in with your TikTok password.
+3. Go LIVE in TikTok LIVE Studio first, then click connect in TikFinity if it hasn't picked up the LIVE yet. Leave TikFinity open the whole time you stream.
+4. Add the overlay as a Link source (see above). The control-panel badge turns green when the overlay can hear TikFinity.
+5. Like or comment from your phone. If Mira reacts, everything works. If not, right-click the Link source and refresh it.
+6. Click **Reset counters** in the control panel when you start a new LIVE (per-viewer reading counts reset).
+
+Keep only one overlay running (LIVE Studio or a browser tab, not both with the same events), or gifts and comments will fire twice. The control-panel simulator still works without TikFinity, for testing Mira without going live.
+
+Override the TikFinity address with `?tikfinity=ws://host:port/` on the overlay URL if you ever need to.
 
 ---
 
@@ -91,13 +99,13 @@ Dates: `12/05/1998`, `12-5-1998`, `12.05.98`, `12 May 1998`, `12th of May, 1998`
 **Option A: free hosting on Render (stable link, recommended)**
 1. Put this folder in a GitHub repository. The included `.gitignore` already excludes `node_modules` and viewer data.
 2. On <https://render.com>, choose **New → Blueprint**, pick the repo (it reads `render.yaml`), or choose **New → Web Service** with build `npm install` and start `npm start`.
-3. In **Environment**, set `ADMIN_KEY` to a long secret, plus optionally `TIKTOK_USERNAME` and `PUBLIC_URL` (your Render URL).
+3. In **Environment**, set `ADMIN_KEY` to a long secret, plus optionally `PUBLIC_URL` (your Render URL).
 4. Your links become:
    * Form, for your bio: `https://your-app.onrender.com/`
-   * Overlay, for OBS: `https://your-app.onrender.com/overlay?key=YOUR_ADMIN_KEY`
+   * Overlay, for LIVE Studio / OBS: `https://your-app.onrender.com/overlay?key=YOUR_ADMIN_KEY`
    * Control panel: `https://your-app.onrender.com/admin?key=YOUR_ADMIN_KEY`
-   
-   The TikTok connection then runs on Render, so your PC only shows the overlay.
+
+   The overlay still runs in LIVE Studio on your PC, so it can hear TikFinity at `ws://127.0.0.1:21213/`. The Render server never connects to TikTok.
 5. Free-plan notes: the app sleeps after about 15 minutes with no visitors (the first visit then takes about 30–60 s to wake it, so open the overlay before you go live). Its disk is temporary, so stored forms are lost on restart. That's fine with 24-hour retention. Railway (<https://railway.app>) works the same way.
 
 **Option B: run on your PC and use a free tunnel**
@@ -133,7 +141,6 @@ Change these in the control panel (**4 · Limits & triggers**; they apply immedi
 | `chat.*` | | Chat replies on/off, `mode`, cooldowns, queue size, comment age, idle questions, greetings. |
 | `llm.*` | | Optional AI replies: `enabled`, `baseUrl`, `apiKey`, `model`, `temperature`, `maxTokens`, `timeoutMs`, `extraPersona` (extra instructions for her character). |
 | `adminKey` | empty | Password for `/overlay` and `/admin` when hosted online. Empty means this PC only. |
-| `tiktok.signApiKey` | empty | Optional free API key from <https://www.eulerstream.com> if connections get rate-limited. |
 
 Gift streaks are added up: 30 Roses in a streak count as 30 coins and unlock the Extended reading.
 
@@ -216,7 +223,7 @@ Without a key, Mira uses her built-in reply engine, which is free, offline and d
 * **Family influence:** the Expression number of the mother's and father's names.
 * An optional question is matched to a topic (love, career, money, health, travel, family, study, general) and answered with fixed guidance for their Personal Year.
 
-Run the tests: `npm test` (41 tests: video track, video files and fallback, number calculations, every possible birth date, every meaning present, gift and code matching, limits, the reading queue, comment filters, chat queue order, cooldowns and modes, the reply engine, the AI fallback, voice fallback, idle questions, and lip sync: mouth shut in silences, open while speaking, no flicker, same result for quiet and loud audio, text fallback, patch sizes).
+Run the tests: `npm test` (65 tests, including TikFinity event ingest: video track, video files and fallback, number calculations, every possible birth date, every meaning present, gift and code matching, limits, the reading queue, comment filters, chat queue order, cooldowns and modes, the reply engine, the AI fallback, voice fallback, idle questions, and lip sync: mouth shut in silences, open while speaking, no flicker, same result for quiet and loud audio, text fallback, patch sizes).
 
 ---
 
@@ -229,8 +236,8 @@ Run the tests: `npm test` (41 tests: video track, video files and fallback, numb
 
 ## Good to know / limitations
 
-* `tiktok-live-connector` is an **unofficial** community library, not a TikTok product. It reads public LIVE events without your login. TikTok can change things and break it for a while (update with `npm update tiktok-live-connector`). Heavy use can be rate-limited (a free Euler Stream key helps). Use at your own risk under TikTok's terms.
-* TikTok does not always send every like on big streams, and the connector sometimes needs a few seconds after you go live before Connect works.
+* Live events come only from the TikFinity desktop app on the streaming PC. This app never opens a server-side TikTok connection (that kind of traffic is a common cause of "suspicious activity" warnings). Connect TikFinity by username, not with your TikTok password.
+* TikTok does not always send every like on big streams. TikFinity only connects once the account is actually live, so start the stream first, then click connect if it doesn't pick up.
 * Mira's voice uses Microsoft Edge's free online "Read Aloud" voices through the unofficial `msedge-tts` package. Microsoft could limit or change it. If that happens, the overlay falls back to the browser voice or subtitles only.
 * Lip sync follows loudness, not exact phonemes, so an "m" or "b" may not close the lips perfectly. The mouth patches are small (about 90 px wide at 1080×1920).
 * Video mode: the talking mouth is a patch from the mouth pictures, not generated video, so her jaw and cheeks don't move while she talks. The idle loop runs backward half the time. Blinks look the same either way, but the incense smoke drifts down during the backward half. There can be a one-frame sharpness flicker where the video loops. Chrome's `loop` may also pause for one frame at the wrap.

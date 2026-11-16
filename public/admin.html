@@ -17,7 +17,7 @@
   button.alt { background:#5b3fa0; color:#fff; } button.red { background:#e05a5a; color:#fff; }
   .row { display:flex; gap:8px; } .row > * { flex:1; }
   .status { padding:4px 10px; border-radius:999px; background:#444; font-size:13px; }
-  .status.connected { background:#2f8f4e; } .status.error { background:#a33; } .status.connecting { background:#a77a1a; }
+  .status.connected { background:#2f8f4e; } .status.error { background:#a33; } .status.connecting { background:#a77a1a; } .status.waiting, .status.disconnected { background:#444; }
   code { background:#000; padding:2px 6px; border-radius:6px; font-size:12px; word-break:break-all; }
   #log { height:160px; overflow:auto; background:#000; padding:8px; font-family:Consolas,monospace; font-size:12px; border-radius:8px; }
   ul { padding-left:18px; margin:6px 0; } small { color:#aaa; }
@@ -27,11 +27,16 @@
 <header><h1>🔮 Fortune Live · Control panel</h1><span class="status" id="st">…</span><span id="stats"></span></header>
 <div class="grid">
   <div class="box">
-    <h2>1 · TikTok LIVE connection</h2>
-    <label>Your TikTok username (without @)</label>
-    <div class="row"><input id="user" placeholder="yourname"><button id="conn">Connect</button><button class="alt" id="disc">Disconnect</button></div>
-    <small>Go LIVE first (phone or TikTok LIVE Studio), then click Connect. Connecting starts a new stream: per-viewer counters reset.</small>
-    <h2 style="margin-top:16px">Overlay links (OBS / LIVE Studio browser source)</h2>
+    <h2>1 · TikFinity (LIVE events)</h2>
+    <p>This app never connects to TikTok from the server. Likes, comments, gifts and joins come from the <b>TikFinity desktop app</b> on the PC that shows the overlay.</p>
+    <ol style="padding-left:20px;margin:8px 0;line-height:1.5">
+      <li>Install TikFinity from <a href="https://tikfinity.zerody.one/" target="_blank" rel="noopener" style="color:#f4d27a">tikfinity.zerody.one</a> (the desktop app, not only the website).</li>
+      <li>Open it and connect by <b>username</b> (don't sign in with your TikTok password).</li>
+      <li>Go LIVE in TikTok LIVE Studio, then click connect in TikFinity if it hasn't already.</li>
+      <li>Add the overlay URL below as a Link source at <b>1080 × 1920</b>. Keep TikFinity open the whole time.</li>
+    </ol>
+    <small>The badge turns green when the overlay can hear TikFinity. Use <b>Reset counters</b> when you start a new LIVE. Only one overlay should be running, or events will fire twice. The simulator in section 3 still works without TikFinity.</small>
+    <h2 style="margin-top:16px">Overlay links (LIVE Studio / OBS browser source)</h2>
     <p>Vertical 1080×1920: <code id="u1"></code></p>
     <p>Landscape 1920×1080: <code id="u2"></code></p>
     <p>Viewer form (link in bio): <code id="u3"></code></p>
@@ -145,8 +150,7 @@ async function load() {
   $('u3').textContent = (config.publicUrl || location.origin) + '/';
 }
 function fill() {
-  const c = config; $('user').value = c.tiktok.username || '';
-  $('cGift').value = c.trigger.giftName; $('cMin').value = c.trigger.minDiamonds; $('cAny').checked = c.trigger.acceptOtherGifts;
+  const c = config; $('cGift').value = c.trigger.giftName; $('cMin').value = c.trigger.minDiamonds; $('cAny').checked = c.trigger.acceptOtherGifts;
   $('lUser').value = c.limits.readingsPerUserPerStream; $('lCode').value = c.limits.usesPerCode; $('lQueue').value = c.limits.maxQueueLength;
   $('lCredit').value = c.limits.giftCreditMinutes; $('lGap').value = c.limits.secondsBetweenReadings; $('dRet').value = c.data.retentionHours;
   $('cTiers').value = c.tiers.map(t => `${t.minDiamonds} | ${t.name} | ${t.level} | ${t.secondsOnScreen}`).join('\n');
@@ -162,15 +166,13 @@ function fill() {
   const CH = c.overlay.character; $('mLead').value = CH.mouth?.leadMs ?? 30; $('mEnabled').checked = CH.mouth?.enabled !== false; $('bEnabled').checked = CH.breathing?.enabled !== false; $('animMode').value = CH.mode || 'rig'; $('chQuality').value = CH.video?.quality || 'auto';
   const L = c.llm; $('lEnabled').checked = L.enabled; $('lBase').value = L.baseUrl; $('lModel').value = L.model; $('lKey').value = L.apiKey;
 }
-function status(t) { const el = $('st'); el.className = 'status ' + t.state; el.textContent = `TikTok: ${t.state}${t.username ? ' @' + t.username : ''}${t.message ? ' · ' + t.message : ''}`; }
+function status(t) { const el = $('st'); const state = (t && t.state) || 'waiting'; el.className = 'status ' + state; el.textContent = `TikFinity: ${state}${t && t.username ? ' @' + t.username : ''}${t && t.message ? ' · ' + t.message : ''}`; }
 function renderQueue(l) {
   $('now').innerHTML = !l.current ? '<small>Nothing on screen</small>' : l.current.kind === 'say' ? `<b>Mira speaking:</b> ${l.current.text}` : `<b>On screen:</b> ${l.current.name} (@${l.current.nickname}) · ${l.current.tierName}`;
   $('q').innerHTML = (l.queue || []).map(i => `<li>${i.name} (@${i.nickname}) · ${i.tierName} · ${i.code}</li>`).join('');
   if (l.stats) $('stats').textContent = `gifts ${l.stats.gifts} · coins ${l.stats.diamonds} · likes ${l.stats.likes} · readings ${l.stats.readings}`;
   $('pause').textContent = l.paused ? 'Resume' : 'Pause'; $('pause').dataset.p = l.paused ? '1' : '';
 }
-$('conn').onclick = async () => { config.tiktok.username = $('user').value.replace(/^@/, ''); await api('/config', config).catch(() => {}); try { await api('/connect', { username: config.tiktok.username }); log('Connected to TikTok LIVE'); } catch (e) { log('Connect failed: ' + e.message); } };
-$('disc').onclick = () => api('/disconnect', {});
 $('pause').onclick = () => api('/pause', { paused: !$('pause').dataset.p }).then(load);
 $('skip').onclick = () => api('/skip', {});  $('clear').onclick = () => api('/clear', {});
 $('newStream').onclick = () => api('/new-stream', {}).then(() => log('Counters reset'));

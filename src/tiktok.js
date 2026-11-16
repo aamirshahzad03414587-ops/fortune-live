@@ -1,71 +1,77 @@
-// TikTok LIVE connection via the unofficial `tiktok-live-connector` package.
-// Converts raw TikTok events into simple objects for LiveEngine.
+// Live events arrive from the overlay, which listens to the TikFinity desktop app
+// at ws://127.0.0.1:21213/ on the streamer's PC. This server NEVER connects to TikTok.
 import { EventEmitter } from 'node:events';
 
 export class TikTokBridge extends EventEmitter {
   constructor(live) {
     super();
     this.live = live;
-    this.conn = null;
-    this.status = { state: 'disconnected', username: '', message: '' };
+    this.seen = new Map();
+    this.status = {
+      state: 'waiting',
+      username: '',
+      message: 'Open the overlay on the streaming PC with TikFinity running (ws://127.0.0.1:21213/)',
+    };
   }
 
-  setStatus(state, message = '') {
-    this.status = { ...this.status, state, message };
+  setStatus(state, message = '', extra = {}) {
+    this.status = { ...this.status, state, message, ...extra };
     this.emit('status', this.status);
   }
 
-  async connect(username) {
-    username = String(username || '').trim().replace(/^@/, '');
-    if (!username) throw new Error('Set your TikTok username first');
-    await this.disconnect();
-    const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await import('tiktok-live-connector');
-    this.status.username = username;
-    this.setStatus('connecting');
-    const opts = { enableExtendedGiftInfo: true, processInitialData: false };
-    if (this.signApiKey) opts.signApiKey = this.signApiKey; // optional free Euler Stream key for more reliable connections
-    const conn = new TikTokLiveConnection(username, opts);
-    this.conn = conn;
-
-    const user = (d) => ({ userId: String(d?.user?.userId || d?.user?.uniqueId || 'unknown'), uniqueId: d?.user?.uniqueId || '', nickname: d?.user?.nickname || d?.user?.uniqueId || 'Viewer' });
-
-    conn.on(WebcastEvent.CHAT, (d) => {
-      const id = d.userIdentity || {};
-      const isFollower = !!(id.isFollowerOfAnchor || id.isMutualFollowingWithAnchor || Number(d.user?.followInfo?.followStatus) >= 1);
-      this.live.handleChat({ ...user(d), comment: d.comment || '', isFollower, isGifter: !!id.isGiftGiverOfAnchor });
-    });
-    conn.on(WebcastEvent.GIFT, (d) => {
-      const details = d.giftDetails || {};
-      const ext = d.extendedGiftInfo || {};
-      const giftType = details.giftType ?? ext.type;
-      if (giftType === 1 && !d.repeatEnd) return; // streak still running; wait for the final event
-      const per = Number(details.diamondCount || ext.diamond_count || 0);
-      const count = Number(d.repeatCount || 1);
-      this.live.handleGift({ ...user(d), giftName: details.giftName || ext.name || `Gift ${d.giftId}`, diamonds: per * count, count });
-    });
-    conn.on(WebcastEvent.LIKE, (d) => this.live.handleLike({ ...user(d), count: Number(d.likeCount || 1) }));
-    conn.on(WebcastEvent.FOLLOW, (d) => this.live.handleFollow(user(d)));
-    conn.on(WebcastEvent.MEMBER, (d) => this.live.handleJoin(user(d)));   // someone joined the LIVE -> batched welcome
-    conn.on(WebcastEvent.STREAM_END, () => this.setStatus('ended', 'The LIVE has ended'));
-    conn.on(ControlEvent.DISCONNECTED, () => { if (this.conn === conn) this.setStatus('disconnected'); });
-    conn.on(ControlEvent.ERROR, (e) => this.emit('log', `TikTok error: ${e?.info || e?.exception?.message || e}`));
-
-    try {
-      const state = await conn.connect();
-      this.live.newStream();
-      this.setStatus('connected', `Room ${state?.roomId || ''}`);
-      return this.status;
-    } catch (e) {
-      this.conn = null;
-      const raw = e?.message || String(e);
-      const msg = /offline|not.*live|room id/i.test(raw + ' ' + (e?.constructor?.name || '')) ? `Could not find a LIVE for @${username}. Check the username and make sure you are LIVE right now, then connect again. (${raw})` : raw;
-      this.setStatus('error', msg);
-      throw new Error(msg);
-    }
+  /** Removed: the server must never open a TikTok connection, even if a username is set. */
+  async connect() {
+    const msg = 'The server no longer connects to TikTok. Install the TikFinity desktop app on the streaming PC, connect it by username, and keep the overlay open in LIVE Studio.';
+    this.setStatus('waiting', msg);
+    throw new Error(msg);
   }
 
   async disconnect() {
-    if (this.conn) { const c = this.conn; this.conn = null; try { await c.disconnect(); } catch {} }
-    if (this.status.state !== 'disconnected') this.setStatus('disconnected');
+    this.setStatus('waiting', 'Open the overlay on the streaming PC with TikFinity running (ws://127.0.0.1:21213/)');
+  }
+
+  ingest(ev) {
+    if (!ev || typeof ev !== 'object') return { ok: false, reason: 'bad-event' };
+    const key = String(ev.dedupeKey || '');
+    if (key) {
+      const now = Date.now();
+      if (this.seen.has(key)) return { ok: false, reason: 'duplicate' };
+      this.seen.set(key, now);
+      if (this.seen.size > 600) for (const [k, t] of this.seen) if (now - t > 60e3) this.seen.delete(k);
+    }
+    const userId = String(ev.id || ev.userId || ev.uniqueId || '').slice(0, 80);
+    const nickname = String(ev.nick || ev.nickname || ev.uniqueId || 'Viewer').slice(0, 80);
+    if (!userId && ev.type !== 'viewers') return { ok: false, reason: 'no-user' };
+    switch (ev.type) {
+      case 'chat':
+        return this.live.handleChat({
+          userId, uniqueId: userId, nickname,
+          comment: String(ev.text || ev.comment || '').slice(0, 500),
+          isFollower: !!ev.isFollower, isGifter: !!ev.isGifter,
+        });
+      case 'gift': {
+        const coins = Number(ev.coins || ev.diamonds || 0) || 0;
+        const count = Number(ev.count || 1) || 1;
+        return this.live.handleGift({
+          userId, uniqueId: userId, nickname,
+          giftName: String(ev.giftName || 'Gift').slice(0, 80),
+          diamonds: coins * count, count,
+        });
+      }
+      case 'like':
+        this.live.handleLike({ userId, nickname, count: Number(ev.count || 1) || 1 });
+        return { ok: true };
+      case 'follow':
+        this.live.handleFollow({ userId, uniqueId: userId, nickname });
+        return { ok: true };
+      case 'join':
+        return this.live.handleJoin({ userId, uniqueId: userId, nickname });
+      case 'viewers':
+      case 'share':
+      case 'status':
+        return { ok: true, ignored: ev.type };
+      default:
+        return { ok: false, reason: 'unknown-type' };
+    }
   }
 }
