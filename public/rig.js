@@ -101,14 +101,14 @@
       const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
       const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
       U = {}; for (const n of ['uOrig', 'uAlpha', 'uBg', 'uW', 'uPatch', 'uSize', 'uFace', 'uNeck', 'uHips', 'uBall', 'uRoll', 'uSway', 'uBreath', 'uYaw', 'uPitch', 'uJaw', 'uBrow', 'uFringe', 'uHeadT', 'uHair']) U[n] = gl.getUniformLocation(prog, n);
-      const tex = (unit, src) => {
+      const tex = (unit, src, fmt = gl.RGBA) => {
         const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); return t;
+        gl.texImage2D(gl.TEXTURE_2D, 0, fmt, fmt, gl.UNSIGNED_BYTE, src); return t;
       };
-      tex(0, texSrc.orig); tex(1, texSrc.alpha); tex(2, texSrc.bg); tex(3, texSrc.w);
+      tex(0, texSrc.orig, gl.RGB); tex(1, texSrc.alpha, gl.LUMINANCE); tex(2, texSrc.bg, gl.RGB); tex(3, texSrc.w);   // no unused channels on the GPU
       patchTex = tex(4, face);
       gl.uniform1i(U.uOrig, 0); gl.uniform1i(U.uAlpha, 1); gl.uniform1i(U.uBg, 2); gl.uniform1i(U.uW, 3); gl.uniform1i(U.uPatch, 4);
       gl.uniform2f(U.uSize, rig.width, rig.height); gl.uniform4f(U.uFace, fx0, fy0, fx1 - fx0, fy1 - fy0);
@@ -270,8 +270,12 @@
        *  (It used to be CSS size x devicePixelRatio: about 2100x3700 in a 1080x1920 LIVE Studio source at 150% Windows scaling,
        *  ~8 million shaded pixels with 9 texture reads each, 60+ times a second.) opts.scale < 1 makes it lighter still. */
       resize(w, h) {
-        const d = Math.min(2, opts.dpr || window.devicePixelRatio || 1), k = Math.min(1, (rig.width * (opts.scale || 1)) / Math.max(1, w * d));
-        canvas.width = Math.max(2, Math.round(w * d * k)); canvas.height = Math.max(2, Math.round(h * d * k));
+        // pixels actually shown: CSS size after the stage's scale transform (on a phone the 1080-wide stage is ~0.36x)
+        // x min(devicePixelRatio, 2), but never more than her painting has
+        const d = Math.min(2, opts.dpr || window.devicePixelRatio || 1);
+        const shown = (canvas.isConnected && canvas.getBoundingClientRect().width) || w, sc = shown / Math.max(1, w);
+        const k = Math.min(1, (rig.width * (opts.scale || 1)) / Math.max(1, w * sc * d));
+        canvas.width = Math.max(2, Math.round(w * sc * d * k)); canvas.height = Math.max(2, Math.round(h * sc * d * k));
       },
       /** nowMs: page clock; inp: { speaking, shape: 'rest'|'small'|'E'|'A'|'O'|'U', open: 0..1, mood: 'neutral'|'happy'|'prophecy' } */
       frame(nowMs, inp = {}) {

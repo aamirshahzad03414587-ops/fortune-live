@@ -132,7 +132,8 @@
       this.aspect = DEFAULT_CHAR.width / DEFAULT_CHAR.height;
       vid.pause(); vid.removeAttribute('src');   // no background video under the rig
       Rig.api = await MiraRig.create(charBox, { base: r.base, image: r.image, preserve: renderMode, seed: 11,
-        scale: lite ? 0.6 : 1, maxTex: lite ? 1024 : 2048, dpr: lite ? 1 : undefined, lean: lite,
+        // lite stays sharp: full painting resolution (941x1672, 1.6 MP) and full-size textures; it saves memory elsewhere
+        scale: 1, maxTex: 2048, lean: lite,
         // GPU reset: show her still picture at once (never a black box), wait for the browser to restore the context,
         // rebuild the rig; if it doesn't come back in 4 s, stay on the still picture and remember to use lite mode.
         onLost: () => {
@@ -249,7 +250,7 @@
     let w = W, h = W / a; if (h < H) { h = H; w = H * a; }
     Object.assign(charBox.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
     // effect canvases: no bigger than her painting (they were the full 1404x2495 box, redrawn every frame)
-    const ek = Math.min(1, (DEFAULT_CHAR.width * (lite ? 0.6 : 1)) / Math.max(1, w));
+    const ek = Math.min(1, (DEFAULT_CHAR.width * (lite ? 0.6 : 1)) / Math.max(1, w));   // soft glows only: 60% is invisible here
     for (const c of [scene, mist]) { const cw = Math.round(w * ek), ch = Math.round(h * ek); if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; } }
     if (Rig.api) Rig.api.resize(w, h);
     // sparkles are off in lite mode: keep that full-stage canvas at 1x1 instead of ~1080x2340 (10 MB on an iPhone)
