@@ -155,7 +155,7 @@ section, aside { transition: opacity .5s, transform .5s; }
 @keyframes rise { 0% { opacity:0; transform: translate(0,0) scale(.5);} 15% { opacity:1; } 100% { opacity:0; transform: translate(var(--dx,0px), -520px) scale(1.2);} }
 #footer { position:absolute; left:0; right:0; bottom:10px; text-align:center; font-size:19px; color:rgba(255,255,255,.85); text-shadow:0 1px 4px #000, 0 0 2px #000; }
 .landscape #footer { left:740px; right:60px; bottom:12px; }
-#soundChip { position:absolute; right:20px; top:20px; z-index:60; padding:12px 18px; font-size:22px; font-weight:700; border-radius:14px; background:#f4d27a; color:#2a0f4a; cursor:pointer; }
+#soundChip { position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); z-index:60; padding:28px 40px; font-size:44px; box-shadow:0 10px 40px rgba(0,0,0,.5); text-align:center; font-weight:700; border-radius:14px; background:#f4d27a; color:#2a0f4a; cursor:pointer; }
 
 #panel { position:absolute; left:40px; top:40px; z-index:50; width:560px; padding:24px; font-size:24px; background:rgba(15,5,25,.96); border:2px solid var(--gold); border-radius:20px; }
 #panel h3 { margin:0 0 10px; color:var(--gold); }

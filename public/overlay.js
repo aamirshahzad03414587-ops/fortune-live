@@ -1,4 +1,5 @@
 (() => {
+  const SharedAudio = { el: new Audio(), unlocked: false }; SharedAudio.el.setAttribute('playsinline', ''); SharedAudio.el.preload = 'auto';
   const qs = new URLSearchParams(location.search);
   const $ = (id) => document.getElementById(id);
   const root = $('root');
@@ -408,7 +409,7 @@
       const r = await Promise.race([trackP, sleep(1200).then(() => null)]);
       if (stopped) return;
       if (!prefs.audio) return silent();
-      audio = new Audio(r ? r.blobUrl : s.url); audio.preload = 'auto';
+      audio = SharedAudio.el; audio.onended = null; audio.onerror = null; audio.src = r ? r.blobUrl : s.url; audio.preload = 'auto';
       audio.onended = () => endFn('audio');
       audio.onerror = () => { logEv('audio-error'); browser(); };
       audio.play().then(() => {
@@ -419,8 +420,24 @@
     }, Math.max(0, delayMs));
     return ctl;
   }
-  $('soundChip').onclick = () => { $('soundChip').hidden = true; new Audio().play().catch(() => {}); };
-  addEventListener('click', () => { $('soundChip').hidden = true; }, { once: true });
+  // Phones only allow sound after a tap, and only on an audio element that was "unlocked" by that tap.
+  // So we use ONE shared <audio> for all of Mira's speech and unlock it on the first tap anywhere.
+  function unlockAudio() {
+    if (SharedAudio.unlocked) return;
+    const el = SharedAudio.el;
+    el.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+    el.play().then(() => { el.pause(); SharedAudio.unlocked = true; $('soundChip').hidden = true; }).catch(() => {});
+    try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume && actx.resume(); } catch {}
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
+    $('soundChip').hidden = true;
+  }
+  $('soundChip').onclick = unlockAudio;
+  ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((ev) => addEventListener(ev, unlockAudio, { passive: true }));
+  if (!renderMode && prefs.audio) {
+    // show the tap prompt up front; if the browser already allows sound (desktop / LIVE Studio) it hides itself
+    const probe = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=');
+    probe.play().then(() => { SharedAudio.unlocked = true; }).catch(() => { $('soundChip').hidden = false; });
+  }
 
   let actx;
   function chime() {
