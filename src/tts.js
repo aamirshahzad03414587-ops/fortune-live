@@ -68,6 +68,27 @@ export class TTS {
   }
 
   get(id) { return this.clips.get(id)?.buf || null; }
+
+  /** MP3 bytes for a short, often repeated text (her "thinking" lines, viewers' names), made once and kept. */
+  cachedClip(text) {
+    const c = this.getConfig(); if (!c.enabled) return Promise.resolve(null);
+    const clean = speakableText(text); if (!clean) return Promise.resolve(null);
+    this.memo = this.memo || new Map();
+    const key = this.voiceFor(clean) + '|' + clean;
+    if (!this.memo.has(key)) {
+      const p = this.edge(clean, this.voiceFor(clean), c).then((b) => (b && b.length >= 300 ? b : null)).catch(() => null);
+      p.then((b) => { if (!b) this.memo.delete(key); });
+      this.memo.set(key, p);
+      if (this.memo.size > 400) this.memo.delete(this.memo.keys().next().value);
+    }
+    return this.memo.get(key);
+  }
+  /** Serve ready-made MP3 bytes (e.g. a name clip + a cached line, joined: constant-bitrate MP3 frames concatenate). */
+  register(buf) {
+    const id = crypto.randomBytes(9).toString('base64url');
+    this.clips.set(id, { buf, createdAt: Date.now() });
+    return { id, url: `/tts/${id}.mp3`, duration: (buf.length * 8) / BITRATE, voice: this.voiceFor('') };
+  }
 }
 
 export const VOICE_CHOICES = [

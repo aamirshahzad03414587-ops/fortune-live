@@ -8,6 +8,8 @@ import { AiGate, Memory, llmReady, ENGAGE_T, ENGAGE_DOB_T } from './ai.js';
 import { ReplyEngine, filterComment, llmReply, llmComplete, detectLanguage, cleanSpoken, normalizeComment, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName, extractBirthDate } from './chat.js';
 import { parseReadingComment, readingScript, showDate, partialScript, parsedWithDate } from './comment-reading.js';
 import { looksLikeDateAttempt, resolveDateAnswer, readAiDate, AI_DATE_PROMPT, MONTH_NAMES, ord } from './dates.js';
+import { FILLER_T, FILLER_UR_T, GROUP_T, ALREADY_READ_T, SESSION_END_T, unclearKind, clarifyLine, sessionLine, numbersPhrase, fill } from './talk.js';
+import { withName } from './ai.js';
 import { Variety, WELCOME_T, WELCOME_ONE_T, HOWTO_T, HOWTO_SHORT_T, EXAMPLE_DATES, IDLE_T } from './variety.js';
 
 export const CODE_RE = /(?:^|[^A-Z0-9])#?([A-HJ-NP-Z]\d{2,4})(?![0-9])/gi;
@@ -17,7 +19,12 @@ export function extractCodes(comment) {
   return out;
 }
 
-const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 1,
+// Every comment gets an answer: no per-viewer cooldown; a viewer's new comments are merged into their waiting one;
+// when the queue is full the rest wait in a backlog (overflowMax), and comments that waited longer than
+// maxCommentAgeSeconds are answered together, by name, in one group line (groupMaxNames per line). While her real
+// answer (AI + voice) takes longer than fillerAfterMs she says a short "thinking" line first (thinkingFiller).
+const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', maxQueue: 12, maxCommentAgeSeconds: 150, secondsBetweenReplies: 1,
+  overflowMax: 300, groupMaxNames: 6, mergeMax: 3, thinkingFiller: true, fillerAfterMs: 900, aiMaxBacklog: 4, voiceMaxWaitMs: 14000,
   idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 45,
   // conversations: a viewer answering Mira's question (within followUpSeconds) skips the cooldown and continues the
   // thread; nobody gets more than maxConsecutiveTurns replies in a row while others wait; when quiet, Mira sometimes
@@ -31,7 +38,8 @@ const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30
 // requireGift=false: everyone who comments a birth date gets one; gifters jump ahead (bigger gift = higher tier).
 // yearOptional: day + month alone still gets a (Birthday + Personal Year) reading. askAmbiguous: for 05/12/1998 ask
 // "5 December or 12 May?" instead of reading it day-first. aiDates: messy dates the rules can't read go to the AI.
-export const READINGS_DEFAULTS = { yearOptional: true, askAmbiguous: false, aiDates: true, fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
+// sessionReplies: after her reading, that viewer's next N comments are answered first, as follow-ups about it.
+export const READINGS_DEFAULTS = { sessionReplies: 2, yearOptional: true, askAmbiguous: false, aiDates: true, fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
   freeTierName: 'Live prediction', freeSeconds: 18, howToEverySeconds: 75, privateForm: false };
 const VOICE_DEFAULTS = { readingSpeechStart: 3, talkSpeechStart: 0.5, tailSeconds: 1.2 };
 
@@ -63,6 +71,7 @@ export class LiveEngine extends EventEmitter {
     // wording variety for this stream (readings, welcomes, idle lines)
     this.variety = new Variety(`${this.now()}-${Math.random().toString(36).slice(2, 8)}`); this.lastJobKind = null;
     this.lastActivity = 0; this.lastHowTo = this.now(); this.pendingDates = new Map(); this.readingVoice = new Map();
+    this.overflow = []; this.sessions = new Map(); this.lastSaySub = null;
     this.stats = { gifts: 0, diamonds: 0, likes: 0, follows: 0, joins: 0, welcomes: 0, readings: 0, replies: 0, startedAt: this.now() };
     this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue);
   }
@@ -201,29 +210,65 @@ export class LiveEngine extends EventEmitter {
     if (C.mode === 'gifters' && !isGifter) return { ok: false, reason: 'not-gifter' };
     if (C.mode === 'followers' && !isFollower) return { ok: false, reason: 'not-follower' };
     if (C.mode === 'followersOrGifters' && !isFollower && !isGifter) return { ok: false, reason: 'not-follower-or-gifter' };
-    // her question to this viewer is still open: this comment is their answer (no cooldown, it continues the thread)
+    // her question to this viewer is still open, or they are in their reading session: this comment continues the thread
+    const comment = String(c.comment).trim().slice(0, 200);
     const followUp = this.memory.awaiting(c.userId, C.followUpSeconds);
-    const last = this.lastReplyAt.get(c.userId) || 0;
-    if (!followUp && this.now() - last < C.userCooldownSeconds * 1000) return { ok: false, reason: 'cooldown' };
-    if (this.chatQueue.some((q) => q.userId === c.userId)) return { ok: false, reason: 'already-queued' };
-    const norm = normalizeComment(c.comment).toLowerCase();
-    if (norm.length > 3 && this.chatQueue.some((q) => this.now() - q.at <= C.maxCommentAgeSeconds * 1000 && normalizeComment(q.comment).toLowerCase() === norm)) return { ok: false, reason: 'duplicate' };   // copy-paste spam
-    this.memory.learn(c.userId, c.nickname, c.comment);
-    const question = isQuestion(c.comment);
-    if (this.chatQueue.length >= C.maxQueue && question) {
-      // a question gets in by pushing out the oldest plain comment ("hi", "nice")
-      const drop = this.chatQueue.findIndex((q) => !q.question);
-      if (drop >= 0) this.chatQueue.splice(drop, 1);
+    const session = this.sessionLeft(c.userId) > 0;
+    this.memory.learn(c.userId, c.nickname, comment);
+    const question = isQuestion(comment);
+    // the same viewer again while their comment still waits: merged into one answer (nothing they say is lost)
+    // (in a reading session each follow-up is its own answer, up to the free ones left)
+    const waiting = [...this.chatQueue, ...this.overflow].filter((q) => q.userId === c.userId);
+    const mine = session && !waiting.some((q) => q.preset) && waiting.length < this.sessionLeft(c.userId) ? null : waiting.at(-1);
+    if (mine && !mine.preset) {
+      mine.parts = [...(mine.parts || [mine.comment]), comment].slice(-(C.mergeMax || 3));
+      mine.comment = mine.parts.join('. ').replace(/([.?!])\./g, '$1').slice(-200);
+      mine.question = mine.question || question; mine.followUp = mine.followUp || followUp; mine.session = mine.session || session; mine.at = this.now();
+      this.prepared.delete(mine.id);
+      this.emit('chatQueue', this.chatQueue); this.prefetch();
+      return { ok: true, merged: true, chat: mine };
     }
-    if (this.chatQueue.length >= C.maxQueue) return { ok: false, reason: 'chat-queue-full' };
-    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).trim().slice(0, 200), at: this.now(), isGifter, isFollower, question, followUp };
-    if (followUp) { const i = this.chatQueue.findIndex((q) => !q.followUp); this.chatQueue.splice(i < 0 ? this.chatQueue.length : i, 0, item); }   // answers to her questions first
+    if (mine) return { ok: true, merged: true, chat: mine };   // she is about to ask them something (date check): that comes first
+    // copy-paste from several viewers: one answer that names all of them
+    const norm = normalizeComment(comment).toLowerCase();
+    const same = norm.length > 3 && this.chatQueue.find((q) => !q.preset && this.now() - q.at <= C.maxCommentAgeSeconds * 1000 && normalizeComment(q.comment).toLowerCase() === norm);
+    if (same) { same.others = [...new Set([...(same.others || []), c.nickname])].slice(0, 5); return { ok: true, merged: true, duplicate: true, chat: same }; }
+    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment, at: this.now(), isGifter, isFollower, question, followUp, session };
+    if (this.chatQueue.length >= C.maxQueue) {
+      // a question, a follow-up or a session comment gets in by moving the newest plain comment to the backlog
+      const j = (question || followUp || session) ? this.chatQueue.map((q) => !q.question && !q.followUp && !q.session && !q.preset).lastIndexOf(true) : -1;
+      if (j >= 0) this.overflow.unshift(...this.chatQueue.splice(j, 1));
+      else {
+        this.overflow.push(item);
+        if (this.overflow.length > (C.overflowMax || 300)) this.overflow.splice(0, this.overflow.length - (C.overflowMax || 300));   // memory guard only
+        this.lastReplyAt.set(c.userId, this.now());
+        this.emit('chatQueue', this.chatQueue); this.pump();
+        return { ok: true, backlog: this.overflow.length, chat: item };
+      }
+    }
+    if (followUp || session) { const i = this.chatQueue.findIndex((q) => !q.followUp && !q.session && !q.preset); this.chatQueue.splice(i < 0 ? this.chatQueue.length : i, 0, item); }   // answers to her questions / reading follow-ups first
     else this.chatQueue.push(item);
-    this.lastReplyAt.set(c.userId, this.now()); // cooldown counts from when we accepted the comment
+    this.lastReplyAt.set(c.userId, this.now());
+    this.warmFiller(c);
     this.emit('chatQueue', this.chatQueue);
     this.pump();
     this.prefetch();
     return { ok: true, chat: item };
+  }
+
+  /** Free follow-ups left in this viewer's reading session (0 = none). */
+  sessionLeft(userId) { const x = this.sessions.get(userId); return x ? x.left : 0; }
+  startSession(userId) {
+    const n = Math.max(0, Number(this.readingsCfg.sessionReplies ?? 2));
+    if (n > 0) this.sessions.set(userId, { left: n, max: n, at: this.now() }); else { this.sessions.delete(userId); return; }
+    // comments they wrote while waiting for the reading are the first follow-ups
+    const theirs = this.chatQueue.filter((q) => q.userId === userId && !q.preset);
+    if (theirs.length) {
+      this.chatQueue = this.chatQueue.filter((q) => !theirs.includes(q));
+      for (const q of theirs) { q.session = true; this.prepared.delete(q.id); }
+      const i = this.chatQueue.findIndex((q) => !q.followUp && !q.session && !q.preset); this.chatQueue.splice(i < 0 ? this.chatQueue.length : i, 0, ...theirs);
+      this.emit('chatQueue', this.chatQueue);
+    }
   }
 
   queueGreeting(kind, u) {
@@ -287,6 +332,14 @@ export class LiveEngine extends EventEmitter {
     return { ok: true, pending: 'date-ai' };
   }
 
+  /** A fixed answer for this viewer, in the chat queue like any reply (replaces anything of theirs still waiting). */
+  presetReply(c, text) {
+    const item = { id: `p${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment || '').slice(0, 200), at: this.now(), preset: text, followUp: false, question: false };
+    this.chatQueue = this.chatQueue.filter((q) => q.userId !== c.userId); this.overflow = this.overflow.filter((q) => q.userId !== c.userId);
+    this.chatQueue.push(item); this.emit('chatQueue', this.chatQueue); this.prefetch(); this.pump();
+    return item;
+  }
+
   /** Mira asks about the date ("Sara, is that 5 December or 12 May?"); the viewer's next comment completes the reading. */
   askDate(c, parsed) {
     const asked = this.dateAsks.get(c.userId) || 0;
@@ -311,9 +364,20 @@ export class LiveEngine extends EventEmitter {
     const R = this.readingsCfg;
     const credit = this.credits.get(c.userId);
     const paid = credit && credit.expiresAt > this.now() ? credit.diamonds : 0;
-    if (this.queue.some((q) => q.userId === c.userId) || this.current?.userId === c.userId) return { ok: false, reason: 'already-queued' };
+    const name = spokenName(c.nickname);
+    if (this.queue.some((q) => q.userId === c.userId) || this.current?.userId === c.userId) {
+      const at = this.queue.findIndex((q) => q.userId === c.userId);
+      if (at >= 0) this.presetReply(c, `${name}, your reading is coming, you are number ${at + 1} in line. Stay with me!`);
+      return { ok: false, reason: 'already-queued' };
+    }
     const done = this.readingsByUser.get(c.userId) || 0;
-    if (done >= R.perViewerPerStream) { this.toast(`${spokenName(c.nickname)}: you already had your prediction this live 💜`, 'warn'); return { ok: false, reason: 'user-limit' }; }
+    if (done >= R.perViewerPerStream) {
+      this.toast(`${name}: you already had your prediction this live 💜`, 'warn');
+      // she still answers: a reading follow-up while their session lasts, otherwise a short reminder of their numbers
+      if (this.sessionLeft(c.userId) > 0) this.enqueueChat({ ...c });
+      else this.presetReply(c, fill(this.variety.choose('already-read', ALREADY_READ_T, c.userId, 'stream'), { name, numbers: numbersPhrase(this.memory.get(c.userId, c.nickname).facts) }));
+      return { ok: false, reason: 'user-limit' };
+    }
     if (R.requireGift && !paid) {
       this.pendingDates.set(c.userId, { c, parsed, expiresAt: this.now() + this.config.limits.giftCreditMinutes * 60e3 });
       const gift = this.config.trigger.giftName || 'a gift';
@@ -392,13 +456,24 @@ export class LiveEngine extends EventEmitter {
     }
     if (this.welcomeWait() === 0) return this.takeWelcome();
     const R = this.readingsCfg;
-    if (R.fromComments && R.howToEverySeconds > 0 && this.now() - this.lastHowTo >= R.howToEverySeconds * 1000 && this.chatQueue.length) {
+    if (R.fromComments && R.howToEverySeconds > 0 && this.now() - this.lastHowTo >= R.howToEverySeconds * 1000 && this.chatQueue.length && this.chatQueue.length <= 2 && !this.overflow.length) {   // not while a busy chat waits
       this.lastHowTo = this.now();
       return { kind: 'say', sub: 'prompt', text: this.replies.howToAsk(), caption: { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } };
     }
-    // drop stale comments, then take the first one - unless that viewer just had maxConsecutiveTurns replies in a row
-    // and somebody else is waiting (nobody hogs her; the thread continues after the others had a turn)
-    this.chatQueue = this.chatQueue.filter((c) => this.now() - c.at <= C.maxCommentAgeSeconds * 1000);
+    // comments that waited too long (a very busy chat) are not dropped: she greets those viewers together, by name
+    const old = (q) => !q.preset && !q.followUp && !q.session && this.now() - q.at > C.maxCommentAgeSeconds * 1000;
+    const stale = [...this.chatQueue.filter(old), ...this.overflow.filter(old)];
+    if (stale.length) {
+      const people = stale.slice(0, Math.max(1, C.groupMaxNames || 6)), ids = new Set(people.map((q) => q.id));
+      this.chatQueue = this.chatQueue.filter((q) => !ids.has(q.id)); this.overflow = this.overflow.filter((q) => !ids.has(q.id));
+      this.emit('chatQueue', this.chatQueue);
+      const names = people.flatMap((q) => [q.nickname, ...(q.others || [])]);   // people who wrote the same thing are named too
+      return { kind: 'say', sub: 'group', text: fill(this.variety.choose('group', GROUP_T, names.join('|'), 'stream'), { names: welcomeNames(names, 12) }), caption: { icon: '💬', title: 'I see you!', text: welcomeNames(names, 4) }, names };
+    }
+    // the backlog moves up as soon as there is room
+    while (this.overflow.length && this.chatQueue.length < C.maxQueue) this.chatQueue.push(this.overflow.shift());
+    // take the first one - unless that viewer just had maxConsecutiveTurns replies in a row and somebody else is
+    // waiting (nobody hogs her; the thread continues after the others had a turn)
     if (!this.chatQueue.length) { this.emit('chatQueue', this.chatQueue); return null; }
     let i = 0;
     if (this.replyStreak >= (C.maxConsecutiveTurns || 2)) { const j = this.chatQueue.findIndex((q) => q.userId !== this.lastReplyUser); if (j >= 0) i = j; }
@@ -479,7 +554,18 @@ export class LiveEngine extends EventEmitter {
   async makeReply(chat, { prefetch = false } = {}) {
     const L = this.config.llm || {};
     const C = this.chatCfg;
-    const rules = () => ({ text: this.replies.reply(chat.comment, chat).text, source: 'rules' });
+    const name = spokenName(chat.nickname);
+    const pick = (cat, list) => this.variety.choose(cat, list, chat.userId + '|' + chat.comment, 'stream');
+    const facts = this.memory.get(chat.userId, chat.nickname).facts;
+    const inSession = chat.session && this.sessionLeft(chat.userId) > 0;
+    // built-in answers (no AI, or the AI is busy / rate-limited / failed): a reading follow-up in a session, a question
+    // back when she does not understand, otherwise the rule-based replies - always with the viewer's name
+    const rules = () => {
+      if (inSession && facts.personalYear) return { text: sessionLine({ name, facts, comment: chat.comment, pick }), source: 'session' };
+      const unclear = unclearKind(chat.comment);
+      if (unclear) return { text: clarifyLine(unclear, name, chat.comment, pick), source: 'clarify' };
+      return { text: withName(name, this.replies.reply(chat.comment, chat).text), source: 'rules' };
+    };
     if (chat.preset) return { text: chat.preset, source: 'rules' };
     if (isSelfHarm(chat.comment)) return rules();
     // magic commands ("pull a card", "my zodiac", "love match Leo Aries" ...): the knowledge base, no AI needed
@@ -490,13 +576,16 @@ export class LiveEngine extends EventEmitter {
     }
     // a birth date in a chat comment: the numbers come from code, not the AI
     if (extractBirthDate(chat.comment)) return rules();
-    // the one AI slot goes to questions and answers to her questions first; plain chat gets it when none are waiting
-    const priority = chat.question || chat.followUp || !this.chatQueue.some((q) => q !== chat && (q.question || q.followUp));
+    // the one AI slot goes to reading follow-ups, questions and answers to her questions first; plain chat gets it when none are waiting
+    // the free AI is slow (6-20 s): in a busy chat she answers from her own knowledge so nobody waits for minutes
+    const backlog = this.chatQueue.filter((q) => q !== chat).length + this.overflow.length;
+    const priority = inSession || (backlog < (this.chatCfg.aiMaxBacklog ?? 4) && (chat.question || chat.followUp || !this.chatQueue.some((q) => q !== chat && (q.question || q.followUp || q.session))));
     if (llmReady(L) && priority) {
       if (prefetch && !this.ai.open() && !this.ai.cached(chat.comment, L.cacheSeconds ?? 300)) return null;
       try {
         const history = this.memory.history(chat.userId);
-        const ctx = this.memory.context(chat.userId) + mysticSnippets(chat.comment, this.memory.get(chat.userId).facts, new Date(this.now())) + (chat.isGifter ? 'This viewer sent a gift tonight.\n' : '');
+        const sess = inSession ? `This viewer just had their numerology reading from you; this comment is free follow-up ${this.sessions.get(chat.userId).max - this.sessions.get(chat.userId).left + 1} of ${this.sessions.get(chat.userId).max} about it: answer about their reading and numbers.\n` : '';
+        const ctx = sess + this.memory.context(chat.userId) + mysticSnippets(chat.comment, this.memory.get(chat.userId).facts, new Date(this.now())) + (chat.isGifter ? 'This viewer sent a gift tonight.\n' : '');
         const name = spokenName(chat.nickname);
         const r = await this.ai.ask(L, { comment: chat.comment, name, cacheable: !history.length },
           () => this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx, history, liveReadings: !!this.readingsCfg.fromComments }));
@@ -517,6 +606,9 @@ export class LiveEngine extends EventEmitter {
   }
 
   async prepareReply(chat, opt = {}) {
+    // is this the last free follow-up of their reading session? (decided now: the queue moves while the answer is made)
+    const ahead = Math.max(0, this.chatQueue.filter((q) => q.userId === chat.userId && q.session).indexOf(chat));
+    const lastOfSession = !!chat.session && this.sessionLeft(chat.userId) - (this.current?.sub === 'reply' && this.current.userId === chat.userId ? 1 : 0) - ahead === 1;
     try {
       const r = await this.makeReply(chat, opt);
       if (!r) return null;
@@ -524,14 +616,51 @@ export class LiveEngine extends EventEmitter {
       // memory: what they said and what she answered (an answer ending on a question waits for theirs)
       this.memory.get(chat.userId, chat.nickname);
       this.memory.add(chat.userId, 'user', chat.comment); this.memory.add(chat.userId, 'assistant', text);
-      if (this.chatCfg.readQuestionAloud && !chat.preset) text = withQuestion(chat.nickname, chat.comment, text);
-      return { text, source, ...extra, sp: await this.speech(text) };
+      if (this.chatCfg.readQuestionAloud && !chat.preset && source !== 'clarify') text = withQuestion(chat.nickname, chat.comment, text);
+      if (chat.others?.length) text += ` Same to you, ${welcomeNames(chat.others, 3)}!`;
+      // the last free follow-up of a reading session ends it, gently
+      if (lastOfSession) text += ' ' + fill(this.variety.choose('session-end', SESSION_END_T, chat.userId, 'stream'), { name: spokenName(chat.nickname) });
+      return { text, source, ...extra, sp: await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 14000) };
     } catch { return null; }
   }
 
-  async speech(text) {
+  /** Make the voice for her "thinking" lines ahead: the lines once per server, each viewer's name when they comment. */
+  warmFiller(c) {
+    if (!this.tts?.cachedClip || this.chatCfg.thinkingFiller === false) return;
+    if (!this.fillersWarm) { this.fillersWarm = true; (async () => { for (const t of [...FILLER_T, ...FILLER_UR_T]) await this.tts.cachedClip(t.replace(/^\{name\},\s*/, '')); })(); }   // one at a time
+    this.tts.cachedClip(spokenName(c.nickname) + ',');
+  }
+
+  /** "Sara, hmm, let me read the stars for you..." - said right away, then her real answer follows. */
+  async sayFiller(chat) {
+    const name = spokenName(chat.nickname), ur = detectLanguage(chat.comment) === 'roman-ur';
+    const tpl = this.variety.choose('filler', ur ? FILLER_UR_T : FILLER_T, chat.id, 'stream'), text = fill(tpl, { name });
+    // the voice is ready at once: the name clip (made when the comment arrived) + the line (made once per server)
+    const voice = (async () => {
+      if (!this.tts?.cachedClip) return null;
+      const [a, b] = await Promise.all([this.tts.cachedClip(name + ','), this.tts.cachedClip(tpl.replace(/^\{name\},\s*/, ''))]);
+      return a && b ? { text, ...this.tts.register(Buffer.concat([a, b])), server: true } : null;
+    })();
+    const sp = { ...((await Promise.race([voice, new Promise((r) => { const t = setTimeout(() => r(null), 700); t.unref?.(); })])) || { text, url: null, duration: this.estimate(text), server: false }) };
+    sp.start = 0.2;
+    const total = Math.max(this.voiceCfg.minSaySeconds ?? 1.5, sp.start + sp.duration + (this.voiceCfg.tailSeconds ?? 0.3));
+    sp.start = Math.min(sp.start, this.voiceCfg.talkSpeechStart ?? 0.2);
+    this.current = { id: `f${this.now()}`, kind: 'say', sub: 'filler', text, source: 'filler', comment: { nickname: chat.nickname, text: chat.comment }, caption: null, speech: sp, seconds: Math.round(total * 10) / 10 };
+    this.lastSaySub = 'filler'; this.stats.fillers = (this.stats.fillers || 0) + 1;
+    this.emit('say', this.current);
+    await new Promise((r) => { const t = setTimeout(r, total * 1000); t.unref?.(); });
+  }
+
+  async speech(text, maxMs = 0) {
     let audio = null;
-    if (this.tts) { try { audio = await this.tts.synth(text); } catch { audio = null; } }
+    // one retry: the free voice service sometimes closes a stream early or times out
+    const tries = (async () => {
+      if (this.tts) for (let i = 0; i < 2 && !audio; i++) { try { audio = await this.tts.synth(text); } catch (e) { audio = null; if (i) this.emit('log', `voice failed twice (${String(e?.message || e).slice(0, 80)}); the overlay uses its own voice / captions`); } }
+      return audio;
+    })();
+    // a reply never waits forever for the voice: after maxMs the overlay speaks it with the device voice / captions
+    audio = maxMs > 0 ? await Promise.race([tries, new Promise((r) => { const t = setTimeout(() => r(null), maxMs); t.unref?.(); })]) : await tries;
+    if (!audio && maxMs > 0) this.emit('log', 'voice too slow, the overlay uses its own voice');
     return { text, url: audio?.url || null, duration: audio ? audio.duration : this.estimate(text), voice: audio?.voice || null, server: !!audio };
   }
 
@@ -543,12 +672,13 @@ export class LiveEngine extends EventEmitter {
       const text = job.spoken || `${job.name}, here is what your numbers whisper. ${job.sentences.join(' ')}`;
       const pre = this.readingVoice.get(job.id); this.readingVoice.delete(job.id);
       for (const q of this.queue.slice(0, 2)) if (q.source === 'comment') this.prepareReadingVoice(q);
-      const sp = { ...(((pre && (await pre)) || (await this.speech(text)))) };
+      const sp = { ...(((pre && (await pre)) || (await this.speech(text, 30000)))) };
       sp.start = prophecy ? Number(P.voiceOffset ?? 4.5) : V.readingSpeechStart;
       const total = Math.max(job.seconds || 0, sp.start + sp.duration + V.tailSeconds, prophecy ? Number(P.voiceOffset ?? 1.8) + Number(P.minSeconds ?? 3) : 0);
       const { reading, parsed, ...show } = job;
       this.current = { ...show, speech: sp, prophecy, seconds: Math.round(total * 10) / 10 };
       this.stats.readings++;
+      if (job.userId) this.startSession(job.userId);   // their next comments are follow-ups about this reading
       this.emit('queue', this.queue);
       this.emit('reveal', this.current);
       this.timer = setTimeout(() => this.finishCurrent(), (total + this.config.limits.secondsBetweenReadings) * 1000);
@@ -558,11 +688,17 @@ export class LiveEngine extends EventEmitter {
     let text = job.text, source = 'rules', sp = null, cards = null, mood = job.mood || null;
     if (job.sub === 'reply') {
       const pre = this.prepared.get(job.chat.id); this.prepared.delete(job.chat.id);
-      const r = (pre && (await pre)) || (await this.prepareReply(job.chat));
+      const C = this.chatCfg, made = (async () => (pre && (await pre)) || (await this.prepareReply(job.chat)))();
+      // not ready at once (AI / voice still working): a short "thinking" line first, so she never sounds stuck
+      if (C.thinkingFiller !== false && this.lastSaySub !== 'filler') {
+        const ready = await Promise.race([made.then(() => true), new Promise((r) => { const t = setTimeout(() => r(false), C.fillerAfterMs ?? 900); t.unref?.(); })]);
+        if (!ready) await this.sayFiller(job.chat);
+      }
+      const r = await made;
       if (r) ({ text, source, sp, cards = null, mood = null } = r);
       else { text = this.replies.reply(job.chat.comment, job.chat).text; }
     }
-    if (!sp) sp = await this.speech(text);
+    if (!sp) sp = await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 14000);
     sp = { ...sp };
     sp.start = V.talkSpeechStart;
     const total = Math.max(V.minSaySeconds ?? 3, sp.start + sp.duration + V.tailSeconds);
@@ -573,6 +709,8 @@ export class LiveEngine extends EventEmitter {
       this.replyStreak = this.lastReplyUser === job.chat.userId ? this.replyStreak + 1 : 1; this.lastReplyUser = job.chat.userId;
     }
     if (job.sub === 'greet') this.lastGreetTime = this.now();
+    if (job.sub === 'reply' && job.chat.session) { const x = this.sessions.get(job.chat.userId); if (x && --x.left <= 0) this.sessions.delete(job.chat.userId); }
+    this.lastSaySub = job.sub;
     this.emit('say', this.current);
     this.prefetch();
     this.timer = setTimeout(() => this.finishCurrent(), (total + (this.chatCfg.secondsBetweenReplies || 0)) * 1000);

@@ -95,3 +95,15 @@ test('both sources: the same comment / gift / join is counted once; TikFinity li
   await b.disconnect();
   assert.equal(contentKey({ type: 'gift', id: 'A', giftName: 'Rose', count: 2 }), 'gift|a|rose|2');
 });
+
+test('direct: a reconnect to the same LIVE room keeps the stream (queues, welcomed list, sessions); a new room starts a new one', async () => {
+  const live = fakeLive(), c = fakeConnector();
+  const b = new TikTokBridge(live, { connector: c.load });
+  b.configure({ username: 'silversecretsketchbook' });
+  await b.connect(); assert.equal(live.got.streams, 1);
+  c.made[0].emit('disconnected');
+  await b.attempt(); assert.equal(b.status.direct.state, 'connected'); assert.equal(live.got.streams, 1, 'same room 123: no reset');
+  b.lastRoomId = 'old'; c.made.at(-1).emit('disconnected');
+  await b.attempt(); assert.equal(live.got.streams, 2, 'a different room: new stream');
+  await b.disconnect();
+});

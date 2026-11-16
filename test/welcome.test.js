@@ -98,7 +98,8 @@ test('questions: read aloud with the name, and they push out plain comments when
   const { live } = setup({ maxQueue: 2 });
   live.handleChat({ userId: 'a', nickname: 'A', comment: 'hello there' });
   live.handleChat({ userId: 'b', nickname: 'B', comment: 'nice live' });
-  assert.equal(live.handleChat({ userId: 'c', nickname: 'C', comment: 'so pretty' }).reason, 'chat-queue-full');
+  assert.equal(live.handleChat({ userId: 'c', nickname: 'C', comment: 'so pretty' }).backlog, 1);   // waits, not dropped
   assert.equal(live.handleChat({ userId: 'd', nickname: 'D', comment: 'when will I travel?' }).ok, true);
-  assert.deepEqual(live.chatQueue.map((q) => q.nickname), ['B', 'D']);
+  assert.deepEqual(live.chatQueue.map((q) => q.nickname), ['A', 'D']);
+  assert.deepEqual(live.overflow.map((q) => q.nickname), ['B', 'C']);
 });

@@ -2,6 +2,8 @@
 // Usage: npm run simulate            (server must be running: npm start)
 //        npm run simulate -- 5       (simulate 5 viewers)
 //        npm run simulate -- busy    (busy live: join bursts + same-birthday comment readings; prints what Mira says)
+//        npm run simulate -- talk    (every message answered: one viewer chatting fast, a reading + its 2 free follow-ups,
+//                                     an unclear message, a burst of 20 viewers; checks that every commenter was named)
 import { loadConfig } from './config.js';
 const cfg = loadConfig();
 const base = process.env.BASE_URL || `http://localhost:${cfg.port}`;
@@ -17,6 +19,7 @@ const people = [
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (process.argv[2] === 'busy') { await busyLive(); process.exit(0); }
+if (process.argv[2] === 'talk') { await talkLive(); process.exit(0); }
 const n = Math.min(Number(process.argv[2] || 3), people.length);
 for (let i = 0; i < n; i++) {
   const [fullName, dob, motherName, fatherName, question, giftName, diamonds] = people[i];
@@ -59,5 +62,33 @@ async function busyLive() {
   const missed = joined.filter((n) => !all.includes(n));
   const gaps = said.slice(1).map((s, i) => (s.t - said[i].t) / 1000);
   console.log(`\n${said.length} lines; joiners ${joined.length}, not greeted: ${missed.length ? missed.join(', ') : 'none'}; longest gap between line starts ${Math.max(0, ...gaps).toFixed(1)} s`);
+  ws.close();
+}
+
+// Every message answered: prints each line with who it answers, then lists anyone who commented but was never named.
+async function talkLive() {
+  const { WebSocket } = await import('ws');
+  const t0 = Date.now(); const ts = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws' + (cfg.adminKey ? '?key=' + encodeURIComponent(cfg.adminKey) : ''));
+  const said = [];
+  ws.on('message', (m) => { const d = JSON.parse(m); if (d.type === 'say' || d.type === 'reveal') { const it = d.item; said.push(it); console.log(`${ts()} [${d.type}/${it.sub || 'reading'}${it.source ? '/' + it.source : ''}] ${it.spoken || it.text || ''}`); } });
+  await new Promise((r) => ws.on('open', r));
+  await post('/new-stream', {});
+  const say = async (nickname, comment) => { const r = await post('/sim/comment', { nickname, comment }); console.log(`${ts()}   ${nickname}: "${comment}" -> ${r.ok ? (r.merged ? 'merged' : r.backlog ? 'backlog ' + r.backlog : 'queued') : r.reason || 'reading'}`); };
+  const people = new Set();
+  const c = async (n, t) => { people.add(n); await say(n, t); };
+  await c('Hina_22', 'hello mira'); await c('Hina_22', 'are you real?'); await sleep(6000); await c('Hina_22', 'will I get married?');
+  await c('Sara_m', 'Sara 12/05/1998 will I travel this year?');
+  await sleep(25000);
+  await c('Sara_m', 'and what about love?'); await sleep(9000); await c('Sara_m', 'and my job?'); await sleep(9000); await c('Sara_m', 'one more?');
+  await c('Zed_x', 'qwrtz'); await c('Numa', '12 98');
+  const fans = ['Ayan', 'Bushra', 'Danish', 'Esha', 'Faraz', 'Ghazal', 'Hamid', 'Iman', 'Junaid', 'Kinza', 'Laiba', 'Moiz', 'Nimra', 'Osama', 'Parisa', 'Qasim', 'Rida', 'Saad', 'Tania', 'Umer'];
+  for (let i = 0; i < fans.length; i++) await c(fans[i] + '_' + i, ['hi', 'nice live', 'pull a card', 'angel number 444', 'lucky colour', 'will I be rich?'][i % 6]);
+  const dur = Number(process.env.SIM_SECONDS || 240) * 1000;
+  while (Date.now() - t0 < dur) await sleep(1000);
+  const all = said.map((x) => x.spoken || x.text || '').join(' ');
+  const spoken = (n) => n.replace(/[_.\-]+/g, ' ').replace(/\d+/g, ' ').trim().split(' ')[0];
+  const missed = [...people].filter((n) => !all.toLowerCase().includes(spoken(n).toLowerCase()));
+  console.log(`\n${said.length} lines for ${people.size} commenters; never named: ${missed.length ? missed.join(', ') : 'nobody'}`);
   ws.close();
 }

@@ -133,8 +133,12 @@ export class TikTokBridge extends EventEmitter {
       conn.on(ControlEvent.ERROR, (e) => this.log(`direct error: ${e?.info || e?.exception?.message || e?.message || e}`));
       const st = await conn.connect();
       if (this.conn !== conn) return;
-      this.live.newStream();
-      this.setDirect('connected', `LIVE room ${st?.roomId || ''}`.trim());
+      // a reconnect to the same LIVE (dropped connection, server restart within the stream) keeps the queues, the
+      // welcomed list, sessions and memory; only a new LIVE room starts a new stream
+      const room = String(st?.roomId || '');
+      if (!room || room !== this.lastRoomId) this.live.newStream();
+      this.lastRoomId = room || this.lastRoomId;
+      this.setDirect('connected', `LIVE room ${room}`.trim());
     } catch (e) {
       this.conn = null;
       const raw = String(e?.message || e || 'unknown error').replace(/\s+/g, ' ').slice(0, 300);
@@ -158,6 +162,9 @@ export class TikTokBridge extends EventEmitter {
       if (this.recent.size > 800) for (const [k, v] of this.recent) if (now - v.at > 60e3) this.recent.delete(k);
     }
     this.counts[source] = (this.counts[source] || 0) + 1;
+    // a one-line summary per minute (joins etc. are not logged one by one): proves the events really arrive
+    const mk = this.minute || (this.minute = { at: this.now(), n: {} }); mk.n[ev.type] = (mk.n[ev.type] || 0) + 1;
+    if (this.now() - mk.at >= 60e3) { this.log(`${source} events in the last ${Math.round((this.now() - mk.at) / 1000)} s: ${Object.entries(mk.n).map(([k, v]) => `${k} ${v}`).join(', ')}`); this.minute = { at: this.now(), n: {} }; }
     if (ev.type === 'chat') this.log(`${source} comment from @${ev.id || ev.uniqueId} (${String(ev.text || '').length} chars)`);
     else if (ev.type === 'gift') this.log(`${source} gift @${ev.id || ev.uniqueId}: ${ev.giftName} x${ev.count || 1}`);
     const key = String(ev.dedupeKey || '');

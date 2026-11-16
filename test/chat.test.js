@@ -94,22 +94,25 @@ test('llmReply calls an OpenAI-compatible endpoint with the persona', async () =
   assert.match(sent.body.messages[0].content, /private/);
 });
 
-test('chat queue: one by one, cooldown, duplicates, max queue, filter modes', async () => {
+test('chat queue: every comment answered - no cooldown, a viewer\'s comments merged, backlog when full, filter modes', async () => {
   const { live, advance } = setup();
   const said = []; live.on('say', (s) => said.push(s));
   live.paused = true;
   assert.ok(live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hello mira' }).ok);
-  assert.equal(live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hello again' }).reason, 'cooldown');
+  const m = live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hello again' });
+  assert.equal(m.merged, true); assert.equal(live.chatQueue[0].comment, 'hello mira. hello again');
   assert.ok(live.handleChat({ userId: 'b', nickname: 'Sara', comment: 'will I marry?' }).ok);
   assert.ok(live.handleChat({ userId: 'c', nickname: 'Omar', comment: 'born 3 june' }).ok);
-  assert.equal(live.handleChat({ userId: 'd', nickname: 'Zara', comment: 'hi' }).reason, 'chat-queue-full');
+  const full = live.handleChat({ userId: 'd', nickname: 'Zara', comment: 'hi there' });
+  assert.equal(full.ok, true); assert.equal(full.backlog, 1);   // waits in the backlog, not dropped
   assert.equal(live.handleChat({ userId: 'e', nickname: 'Spam', comment: 'free followers www.x.com' }).reason, 'link');
   advance(61e3);
-  assert.equal(live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hey' }).reason, 'already-queued');
+  assert.equal(live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hey' }).merged, true);
   live.setPaused(false);
-  await sleep(250);
-  assert.deepEqual(said.map((s) => s.comment.nickname), ['Ali', 'Sara', 'Omar']);
+  await sleep(400);
+  assert.deepEqual(said.map((s) => s.comment.nickname).slice(0, 4), ['Ali', 'Sara', 'Omar', 'Zara']);
   assert.match(said[2].text, /Birthday number/);
+  for (const s of said) assert.match(s.text, new RegExp(s.comment.nickname), 'every answer says the name');
 
   const g = setup({ mode: 'gifters' });
   assert.equal(g.live.handleChat({ userId: 'x', nickname: 'X', comment: 'hello' }).reason, 'not-gifter');
@@ -122,14 +125,17 @@ test('chat queue: one by one, cooldown, duplicates, max queue, filter modes', as
   assert.ok(f.live.handleChat({ userId: 'y', nickname: 'Y', comment: 'hello', isFollower: true }).ok);
 });
 
-test('stale comments are skipped', async () => {
+test('comments that waited too long are not dropped: those viewers are greeted together by name', async () => {
   const { live, advance } = setup();
   const said = []; live.on('say', (s) => said.push(s)); live.paused = true;
   live.handleChat({ userId: 'a', nickname: 'Old', comment: 'hello' });
+  live.handleChat({ userId: 'a2', nickname: 'Older', comment: 'nice live' });
+  live.handleChat({ userId: 'a3', nickname: 'Copycat', comment: 'nice live' });   // same words: merged, still named
   advance(120e3);
   live.handleChat({ userId: 'b', nickname: 'New', comment: 'hello' });
-  live.setPaused(false); await sleep(150);
-  assert.deepEqual(said.map((s) => s.comment.nickname), ['New']);
+  live.setPaused(false); await sleep(250);
+  assert.equal(said[0].sub, 'group'); assert.match(said[0].text, /Old, Older and Copycat/);
+  assert.equal(said[1].comment.nickname, 'New');
 });
 
 test('priority: readings before greetings before chat; prophecy for tier 3', async () => {

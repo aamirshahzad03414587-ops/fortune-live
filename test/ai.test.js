@@ -138,19 +138,20 @@ test('two-way: her question -> the viewer\'s next comment continues the thread (
   assert.equal(r.source, 'llm');
   assert.deepEqual(seen[1].history.map((h) => h.role), ['user', 'assistant']);
   assert.match(seen[1].context, /talking about love/); assert.match(seen[1].context, /answers the question you just asked/);
-  // without her question the cooldown still applies
-  live.handleChat({ userId: 'o2', nickname: 'O2', comment: 'hello' }); live.lastReplyAt.set('o2', clock.t);
-  assert.equal(live.handleChat({ userId: 'o2', nickname: 'O2', comment: 'hello again' }).reason, 'cooldown');
+  // no cooldown: a second comment right after the first is answered too (merged while the first still waits)
+  live.handleChat({ userId: 'o2', nickname: 'O2', comment: 'hello' });
+  assert.equal(live.handleChat({ userId: 'o2', nickname: 'O2', comment: 'hello again' }).ok, true);
 });
 
-test('fair turns: nobody gets more than 2 replies in a row while others wait; copy-paste spam dropped', () => {
+test('fair turns: nobody gets more than 2 replies in a row while others wait; copy-paste comments answered once, naming everyone', () => {
   const { live } = setup();
   live.replyStreak = 2; live.lastReplyUser = 's';
   live.chatQueue = [{ id: 1, userId: 's', nickname: 'Sara', comment: 'and money?', at: live.now(), followUp: true }, { id: 2, userId: 'b', nickname: 'Bo', comment: 'hi', at: live.now() }];
   assert.equal(live.nextJob().chat.userId, 'b');
   assert.equal(live.nextJob().chat.userId, 's');
   live.handleChat({ userId: 'x1', nickname: 'X1', comment: 'FOLLOW ME for luck' });
-  assert.equal(live.handleChat({ userId: 'x2', nickname: 'X2', comment: 'follow me  for luck' }).reason, 'duplicate');
+  const d = live.handleChat({ userId: 'x2', nickname: 'X2', comment: 'follow me  for luck' });
+  assert.equal(d.duplicate, true); assert.deepEqual(d.chat.others, ['X2']);
 });
 
 test('engage: when quiet, she asks an active chatter something by name; their reply continues it', () => {

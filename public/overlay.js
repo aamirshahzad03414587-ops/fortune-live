@@ -1,6 +1,25 @@
 (() => {
   const SILENCE = '/assets/silence.mp3';
   const SharedAudio = { el: new Audio(), unlocked: false }; SharedAudio.el.setAttribute('playsinline', ''); SharedAudio.el.preload = 'auto';
+  // Web Audio output for her voice (iPhone first choice). iOS Safari kept refusing <audio>.play() for speech that
+  // arrives later from the server ("audio-blocked" in every [diag] of a real iPhone LIVE, even after the tap), while an
+  // AudioContext that was resumed by one tap keeps playing. One context for the whole session; resumed before every
+  // line and on every tap / return to the page (iOS suspends or "interrupts" it after backgrounding, calls, Siri ...).
+  const AudioOut = {
+    ctx: null, src: null, err: null, via: null, fails: 0,
+    make() { if (!this.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { try { this.ctx = new AC(); } catch (e) { this.err = 'ctx ' + e.name; } } } return this.ctx; },
+    get state() { return this.ctx ? this.ctx.state : 'none'; },
+    async resume() {
+      const c = this.ctx; if (!c) return false;
+      if (c.state !== 'running') { try { await Promise.race([c.resume(), new Promise((r) => setTimeout(r, 600))]); } catch (e) { this.err = 'resume ' + e.name; } }
+      return c.state === 'running';
+    },
+    /** In a tap: resume + play one silent sample (what iOS needs to really open the output). */
+    tap() { const c = this.make(); if (!c) return; try { c.resume(); const b = c.createBuffer(1, 1, 22050), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); } catch {} },
+    stop() { if (this.src) { try { this.src.onended = null; this.src.stop(); } catch {} this.src = null; } },
+  };
+  // iOS 17+: speech is "playback" audio, so Web Audio is heard even with the ring / silent switch on (like <audio>)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
   const qs = new URLSearchParams(location.search);
   const $ = (id) => document.getElementById(id);
   const root = $('root');
@@ -474,9 +493,10 @@
     stopSpeech();
     let audio = null, timer = null, stopped = false, startedAt = 0, endFn, lastCT = -1, lastCTAt = 0;
     const ended = new Promise((r) => (endFn = (why) => { if (curSpeech === ctl) { Lip.clock = null; } r(why); }));
+    let waT0 = 0, waSrc = null;
     const ctl = { duration: s.duration || 3, how: 'text', ended,
-      stop() { stopped = true; clearTimeout(timer); try { audio && audio.pause(); } catch {} try { speechSynthesis.cancel(); } catch {} endFn('stopped'); },
-      elapsed() { if (audio && ctl.how === 'audio') return audio.currentTime; return startedAt ? (performance.now() - startedAt) / 1000 : 0; } };
+      stop() { stopped = true; clearTimeout(timer); try { audio && audio.pause(); } catch {} if (waSrc && AudioOut.src === waSrc) AudioOut.stop(); try { speechSynthesis.cancel(); } catch {} endFn('stopped'); },
+      elapsed() { if (ctl.how === 'webaudio') return AudioOut.ctx.currentTime - waT0; if (audio && ctl.how === 'audio') return audio.currentTime; return startedAt ? (performance.now() - startedAt) / 1000 : 0; } };
     curSpeech = ctl;
     const textTrack = () => LipSync.fromText(s.text || '', ctl.duration);
     const trackP = s.url ? loadTrack(s.url).catch((e) => { logEv('lip-decode-failed', { err: String(e && e.message || e) }); return null; }) : Promise.resolve(null);
@@ -515,6 +535,31 @@
       if (stopped) return;
       if (!prefs.audio) return silent();
       if (!audioOwner) return silent();   // another overlay window is the one that speaks (only one voice on the LIVE)
+      // 1) Web Audio (iPhone / iPad first; elsewhere when <audio> is refused): the decoded bytes on the one context
+      const webAudio = async () => {
+        if (!r || !AudioOut.make()) return false;
+        if (!(await AudioOut.resume())) { AudioOut.err = 'ctx ' + AudioOut.state; return false; }
+        try {
+          const buf = await AudioOut.ctx.decodeAudioData(r.bytes.slice(0));
+          if (stopped) return true;
+          AudioOut.stop(); try { audio && audio.pause(); } catch {}
+          const src = AudioOut.ctx.createBufferSource(); src.buffer = buf; src.connect(AudioOut.ctx.destination);
+          waSrc = src; AudioOut.src = src; waT0 = AudioOut.ctx.currentTime + 0.02; src.start(waT0);
+          src.onended = () => { if (AudioOut.src === src) AudioOut.src = null; endFn('audio'); };
+          ctl.how = 'webaudio'; ctl.duration = buf.duration; startedAt = performance.now(); AudioOut.via = 'webaudio'; AudioOut.fails = 0;
+          startLips(() => (AudioOut.src === src ? Math.max(0, AudioOut.ctx.currentTime - waT0) : null), r.track);
+          logEv('audio-play', { url: s.url, via: 'webaudio' }); window.__audioLog = (window.__audioLog || []).slice(-50).concat({ url: s.url, at: Date.now(), via: 'webaudio' });
+          return true;
+        } catch (e) { AudioOut.err = 'decode ' + e.name; return false; }
+      };
+      const failed = (why) => {
+        AudioOut.fails++; logEv('audio-blocked', { err: why, ctx: AudioOut.state });
+        $('soundChip').hidden = false;                       // small "tap to enable sound" hint; the caption keeps going
+        if (AudioOut.fails === 1 || AudioOut.fails % 10 === 0) sendDiag('audio-fail');
+        silent();
+      };
+      if ((IOS || SharedAudio.preferWebAudio) && (await webAudio())) return;
+      if (stopped) return;
       audio = SharedAudio.el; audio.onended = null; audio.onerror = null; audio.preload = 'auto';
       setAudioSrc(audio, r ? URL.createObjectURL(new Blob([r.bytes], { type: 'audio/mpeg' })) : s.url);
       audio.onended = () => endFn('audio');
@@ -523,13 +568,21 @@
         ctl.how = 'audio'; startedAt = performance.now();
         if (r) startLips(audioClock, r.track); else { startLips(audioClock, textTrack()); trackP.then((x) => { if (x && curSpeech === ctl) { Lip.track = x.track; Lip.source = 'audio'; } }); }
         logEv('audio-play', { url: s.url }); window.__audioLog = (window.__audioLog || []).slice(-50).concat({ url: s.url, at: Date.now() });
-      }).catch((e) => { logEv('audio-blocked', { err: e.name }); if (e.name === 'NotAllowedError') $('soundChip').hidden = false; silent(); });
+      }).catch(async (e) => {
+        AudioOut.err = 'element ' + e.name;
+        // 2) <audio> refused (autoplay rules after idle / backgrounding): try Web Audio, then the hint + captions only
+        if (!IOS && !stopped) { SharedAudio.preferWebAudio = true; if (await webAudio()) return; }
+        if (!stopped) failed(e.name);
+      });
     }, Math.max(0, delayMs));
     return ctl;
   }
   // Phones only allow sound after a tap, and only on an audio element that was "unlocked" by that tap.
   // So we use ONE shared <audio> for all of Mira's speech and unlock it on the first tap anywhere.
   function unlockAudio() {
+    // every tap re-opens the Web Audio output (cheap); iOS suspends / interrupts it after backgrounding or a call
+    AudioOut.tap();
+    if (AudioOut.state === 'running') { $('soundChip').hidden = true; AudioOut.fails = 0; }
     if (SharedAudio.unlocked) return;
     const el = SharedAudio.el;
     setAudioSrc(el, SILENCE);
@@ -539,6 +592,8 @@
     $('soundChip').hidden = true;
   }
   $('soundChip').onclick = unlockAudio;
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) AudioOut.resume(); });
+  addEventListener('pageshow', () => AudioOut.resume());
   ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((ev) => addEventListener(ev, unlockAudio, { passive: true }));
   if (!renderMode && prefs.audio) {
     // show the tap prompt up front; if the browser already allows sound (desktop / LIVE Studio) it hides itself
@@ -848,7 +903,7 @@
       mem: { img: Rig.api && Rig.api.memory ? Math.round(Rig.api.memory() / 1e5) / 10 : undefined, heap: pm ? Math.round(pm.usedJSHeapSize / 1e5) / 10 : undefined, heapMax: pm ? Math.round(pm.jsHeapSizeLimit / 1e6) : undefined },
       dom: { nodes: document.getElementsByTagName('*').length, imgs: document.images.length, canvases: document.getElementsByTagName('canvas').length, videos: document.getElementsByTagName('video').length },
       n: { say: (evCount['lips-on'] || 0), lips: evCount['speech-text'] || 0, lost: Rig.lost || 0, ws: Diag.ws, err: Diag.errs.length },
-      last: events.slice(-8).map((e) => e.e), errs: Diag.errs.slice(), vis: document.visibilityState, audio: { unlocked: !!SharedAudio.unlocked, owner: !!audioOwner } };
+      last: events.slice(-8).map((e) => e.e), errs: Diag.errs.slice(), vis: document.visibilityState, audio: { unlocked: !!SharedAudio.unlocked, owner: !!audioOwner, ctx: AudioOut.state, via: AudioOut.via, err: AudioOut.err, fails: AudioOut.fails, played: evCount['audio-play'] || 0, blocked: evCount['audio-blocked'] || 0 } };
   }
   function sendDiag(reason) {
     if (renderMode || qs.get('diag') === '0') return;

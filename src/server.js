@@ -39,6 +39,7 @@ function requireKey(req, res, next) {
   res.status(401).send('Admin key required. Add ?key=YOUR_ADMIN_KEY to the URL (set "adminKey" in config.json).');
 }
 
+const keepAlive = { url: null, minutes: 0, last: null, ok: null };
 // ---------- public pages ----------
 const pub = path.join(ROOT, 'public');
 // readings now happen in the TikTok comments; the old private form + codes only run with readings.privateForm = true
@@ -49,7 +50,7 @@ app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report
 app.get('/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
 app.post('/diag', express.text({ type: '*/*', limit: '8kb' }), diagRoute());
-app.get('/healthz', (req, res) => res.json({ ok: true, tiktok: tiktok.status.state }));
+app.get(['/healthz', '/health'], (req, res) => res.json({ ok: true, tiktok: tiktok.status.state, keepAlive: keepAlive.url ? { everyMinutes: keepAlive.minutes, last: keepAlive.last, ok: keepAlive.ok } : null }));
 app.get('/tts/:id.mp3', (req, res) => {
   const buf = tts.get(req.params.id);
   if (!buf) return res.status(404).end();
@@ -241,4 +242,21 @@ server.listen(config.port, () => {
   console.log('   Fight-game phone mode (server-side TikTok connection):  ' + base + '/tt?u=USERNAME');
   console.log('');
   if (tiktok.usesDirect && tiktok.username) tiktok.connect().catch((e) => console.log('[tiktok]', e.message));
+  startKeepAlive();
 });
+
+// Keep the free Render server awake (it sleeps after 15 minutes without inbound HTTP, and a sleeping server can't read
+// the LIVE): every KEEP_ALIVE_MINUTES (default 10) it calls its own public URL, which goes through Render's proxy like
+// any visitor. Render sets RENDER_EXTERNAL_URL itself; PUBLIC_URL / publicUrl override it. KEEP_ALIVE=0 turns it off.
+// One free service running 24/7 uses ~720-744 of the 750 free instance hours a month.
+function startKeepAlive() {
+  const url = (process.env.KEEP_ALIVE_URL || process.env.PUBLIC_URL || config.publicUrl || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+  if (!url || process.env.KEEP_ALIVE === '0' || /localhost|127\.0\.0\.1/.test(url)) return;
+  keepAlive.url = url; keepAlive.minutes = Math.max(1, Number(process.env.KEEP_ALIVE_MINUTES || 10));
+  const ping = () => fetch(url + '/healthz?keepalive=1', { signal: AbortSignal.timeout(20000) })
+    .then((r) => { keepAlive.ok = r.ok; }).catch((e) => { keepAlive.ok = false; console.log('[keepalive] ping failed:', e.message); })
+    .finally(() => { keepAlive.last = new Date().toISOString(); });
+  setTimeout(ping, 60e3).unref?.();
+  setInterval(ping, keepAlive.minutes * 60e3).unref?.();
+  console.log(`[keepalive] pinging ${url}/healthz every ${keepAlive.minutes} min`);
+}
