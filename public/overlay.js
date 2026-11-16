@@ -74,6 +74,17 @@
     incense: [{ x: 85.5, y: 57.2 }],
     prophecy: { enabled: true, eyes: [{ x: 15.8, y: 55.4 }, { x: 20.3, y: 55.0 }], eyeSize: 3.6, skull: { x: 14.8, y: 55.6 } },
   };
+  // Mira v2 ("Tarot Mistress", a layered rig drawn for real lip sync and movement): ?char=v2, or
+  // overlay.character.char = 'v2' in the config. The original painting stays the default. Effect positions are % of 1080x1920.
+  const CHAR_V2 = {
+    mode: 'rig', rig: { base: '/assets/rig-v2/', image: '/assets/rig-v2/still.jpg' }, still: '/assets/rig-v2/still.jpg', width: 1080, height: 1920,
+    mouth: { ...DEFAULT_CHAR.mouth, enabled: false },
+    ball: { x: 43.98, y: 67.45, r: 11.1 },
+    candles: [{ x: 3.7, y: 48.4 }, { x: 82.8, y: 37.5 }, { x: 72.8, y: 45.8 }, { x: 89.3, y: 56.8 }, { x: 97.6, y: 55.2 }],
+    lanterns: [{ x: 10.2, y: 10.4 }, { x: 87.6, y: 10.4 }],
+    prophecy: { enabled: true, eyes: [{ x: 8.7, y: 57.2 }, { x: 13.0, y: 57.1 }], eyeSize: 3.0, skull: { x: 11.1, y: 56.8 } },
+  };
+  const charV2 = () => (qs.get('char') || (cfg.overlay.character || {}).char) === 'v2';
   const ID = [1, 0, 0, 0, 1, 0];
   /** Rig mode: the live puppet (null in video / still mode). */
   const Rig = { api: null, gesture(kind, o) { if (this.api) this.api.gesture(kind, o); } };
@@ -83,7 +94,8 @@
   const Char = {
     mode: 'loading', inited: false, kind: 'still',
     get c() {
-      const u = cfg.overlay.character || {}, d = DEFAULT_CHAR, pick = (k) => ({ ...d[k], ...(u[k] && typeof u[k] === 'object' ? u[k] : {}) });
+      // v2 brings its own pictures and coordinates: the config's v1 picture settings don't apply to it
+      const v2 = charV2(), u = v2 ? {} : cfg.overlay.character || {}, d = v2 ? { ...DEFAULT_CHAR, ...CHAR_V2 } : DEFAULT_CHAR, pick = (k) => ({ ...d[k], ...(u[k] && typeof u[k] === 'object' ? u[k] : {}) });
       return { ...d, ...u, rig: pick('rig'), video: pick('video'), breathing: pick('breathing'), mouth: pick('mouth'), ball: pick('ball'), prophecy: pick('prophecy'),
         candles: u.candles || d.candles, lanterns: u.lanterns || d.lanterns, incense: u.incense || d.incense };
     },
@@ -129,11 +141,12 @@
       if (!window.MiraRig) throw new Error('rig.js not loaded');
       this.kind = 'rig'; Vid.on = false;
       still.src = r.image; bodyImg.removeAttribute('src'); $('bgBlur').style.backgroundImage = `url("${r.image}")`;
-      this.aspect = DEFAULT_CHAR.width / DEFAULT_CHAR.height;
+      this.aspect = this.c.width / this.c.height;
       vid.pause(); vid.removeAttribute('src');   // no background video under the rig
       Rig.api = await MiraRig.create(charBox, { base: r.base, image: r.image, preserve: renderMode, seed: 11,
         // lite stays sharp: full painting resolution (941x1672, 1.6 MP) and full-size textures; it saves memory elsewhere
-        scale: 1, maxTex: 2048, lean: lite,
+        // (v2 is drawn at 1080x1920: in lite it renders at 87%, the same 941x1672 pixel budget as the old rig)
+        scale: lite && charV2() ? 0.87 : 1, maxTex: 2048, lean: lite,
         // GPU reset: show her still picture at once (never a black box), wait for the browser to restore the context,
         // rebuild the rig; if it doesn't come back in 4 s, stay on the still picture and remember to use lite mode.
         onLost: () => {
@@ -148,6 +161,7 @@
         },
         onRestoreFailed: (e) => this.rigFallback(String(e && e.message || e)) });
       charBox.insertBefore(Rig.api.canvas, $('warm'));
+      Rig.v2 = Rig.api.version === 2; root.classList.toggle('charV2', Rig.v2); logEv('rig-on', { version: Rig.api.version });
       root.classList.add('rigMode');
       layoutChar(); this.build();
       this.mouthOk = false; mouthEl.hidden = true;
@@ -592,6 +606,8 @@
     // body language: she reads the question first (head tilt, brows up), nods hello, smiles at thank-yous
     const lead = (s.start ?? 0.5);
     if (item.sub === 'reply') Rig.gesture('listen', { seconds: lead + 0.5 });
+    else if (Rig.v2 && (item.sub === 'welcome' || item.sub === 'greet')) Rig.gesture('greet', { amp: item.sub === 'welcome' ? 1 : 0.8 });
+    else if (Rig.v2 && item.sub === 'thanks') Rig.gesture('thanks');
     else if (item.sub === 'welcome') { Rig.gesture('nod'); Rig.gesture('happy', { seconds: 0.9 }); }
     else if (item.sub === 'greet') { Rig.gesture('happy', { seconds: 1.9 }); Rig.gesture('nod', { amp: 0.7 }); }
     else Rig.gesture('brow');
@@ -706,7 +722,7 @@
       else if (m.type === 'say') say(m.item);
       else if (m.type === 'skip') skip();
       else if (m.type === 'toast') toast(m.text, m.kind);
-      else if (m.type === 'gift') { Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
+      else if (m.type === 'gift') { if (Rig.v2) Rig.gesture('thanks'); else Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
       else if (m.type === 'like') hearts(Math.ceil((m.count || 1) / 3));
       else if (m.type === 'follow' && cfg.overlay.showFollowToasts !== false) toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
     };

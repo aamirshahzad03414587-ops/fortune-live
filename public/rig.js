@@ -9,6 +9,9 @@
  *   2. a fragment shader warps the whole picture with smooth displacement fields (breathing, body sway,
  *      head roll / turn / nod with face parallax, hair springs, jaw, brows) and samples the face canvas
  *      through the SAME warp, so the mouth and eyes move with the face (never a sticker on top).
+ * Version 2 rigs (rig.json "version": 2, tools/build-rig-v2.py, the "Tarot Mistress" design) are layered instead:
+ *   room (static) < body (warped like above) < ponytail (spring chain pinned to the ribbon knot) < tarot charm
+ *   (pendulum pinned to the belt) < table + crystal ball (static, in front). Coordinates come from rig.json.
  * Usage: const rig = await MiraRig.create(container, { base: '/assets/rig/', image: '/assets/mira2.jpg' });
  *        rig.frame(nowMs, { speaking, shape, open, mood }); rig.gesture('nod' | 'listen' | 'happy' | 'think');
  */
@@ -56,6 +59,63 @@
     gl_FragColor = vec4(mix(back, c, a), 1.0);
   }`;
 
+  // v2: layered character. disp() is the same displacement field as v1 with rig.json coordinates; the ponytail and the
+  // charm are sampled through their own rotation about an anchor that moves exactly like the body there (no seam).
+  const FRAG2 = `
+  #ifdef GL_FRAGMENT_PRECISION_HIGH
+  precision highp float;
+  #else
+  precision mediump float;
+  #endif
+  varying vec2 vUV;
+  uniform sampler2D uRoom, uBody, uW, uTail, uCharm, uTable, uPatch;
+  uniform vec2 uSize; uniform vec4 uFace; uniform vec2 uNeck, uHips, uFaceC, uFaceR, uBodyY, uChest, uBrowL, uBrowR, uBrowS;
+  uniform float uCX, uJawSX; uniform vec4 uJawY;
+  uniform float uRoll, uSway, uBreath, uYaw, uPitch, uJaw, uBrow, uFringe, uLean; uniform vec2 uHeadT, uHair;
+  uniform vec4 uTailR, uCharmR, uTableR; uniform vec2 uTailA, uCharmA, uTailAng, uCharmAng; uniform float uTailL, uCharmL;
+  vec2 rot(vec2 p, vec2 c, float a){ vec2 d = p - c; float s = sin(a), co = cos(a); return c + vec2(co*d.x - s*d.y, s*d.x + co*d.y); }
+  vec2 disp(vec2 p){
+    vec4 w = texture2D(uW, p / uSize);
+    float upper = smoothstep(uBodyY.y, uBodyY.x, p.y);           // breathing / bowing move the shoulders, not the skirt
+    vec2 D = w.a * (rot(p, uHips, uSway) - p);
+    D.y -= (uBreath - uLean) * w.a * upper;
+    float chest = exp(-pow((p.y - uChest.x) / uChest.y, 2.0));
+    D.x += uBreath * 0.45 * w.a * upper * chest * clamp((p.x - uCX) / 170.0, -1.5, 1.5);
+    vec2 hd = rot(p, uNeck, uRoll) - p + uHeadT + vec2(0.0, uLean);
+    vec2 f = (p - uFaceC) / uFaceR;
+    hd += vec2(uYaw, uPitch) * (0.35 + 0.65 * exp(-0.5 * dot(f, f)));
+    D += w.r * hd;
+    D += w.g * uHair;
+    D.x += w.b * uFringe;
+    float jx = (p.x - uCX) / uJawSX;
+    D.y += uJaw * smoothstep(uJawY.x, uJawY.y, p.y) * (1.0 - smoothstep(uJawY.z, uJawY.w, p.y)) * exp(-0.5 * jx * jx);
+    vec2 b1 = (p - uBrowL) / uBrowS, b2 = (p - uBrowR) / uBrowS;
+    D.y -= uBrow * (exp(-0.5 * dot(b1, b1)) + exp(-0.5 * dot(b2, b2)));
+    return D;
+  }
+  vec4 part(sampler2D t, vec4 r, vec2 q){ vec2 u = (q - r.xy) / r.zw; if (u.x < 0.0 || u.y < 0.0 || u.x > 1.0 || u.y > 1.0) return vec4(0.0); return texture2D(t, u); }
+  vec2 swing(vec2 p, vec2 a, vec2 ang, float len){
+    vec2 d = p - (a + disp(a)); float s = clamp(d.y / len, 0.0, 1.2);
+    float th = ang.x * s + ang.y * s * s;                          // root angle + extra bend toward the tip (spring chain)
+    float sn = sin(-th), cs = cos(-th);
+    return a + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
+  }
+  void main(){
+    vec2 p = vUV * uSize;
+    vec3 col = texture2D(uRoom, vUV).rgb;
+    vec2 q = p - disp(p);
+    vec4 b = texture2D(uBody, q / uSize);
+    vec2 fp = (q - uFace.xy) / uFace.zw;
+    if (fp.x > 0.0 && fp.y > 0.0 && fp.x < 1.0 && fp.y < 1.0) b.rgb = texture2D(uPatch, fp).rgb;
+    col = mix(col, b.rgb, b.a);
+    vec4 t = part(uTail, uTailR, swing(p, uTailA, uTailAng, uTailL)); col = mix(col, t.rgb, t.a);
+    vec4 c = part(uCharm, uCharmR, swing(p, uCharmA, uCharmAng, uCharmL)); col = mix(col, c.rgb, c.a);
+    vec4 tb = part(uTable, uTableR, p); col = mix(col, tb.rgb, tb.a);
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+  // shapes a rig may not have drawn (v1 has no I / F-V / M-B-P mouths): the nearest one it has (null = her own closed lips)
+  const MOUTH_FALLBACK = { I: 'E', FV: 'small', MBP: null };
+
   const loadImg = (src) => new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('image ' + src)); i.src = src; });
   // smooth pseudo-random motion
   const noise = (t, s) => (Math.sin(t * 1.7 + s) + Math.sin(t * 2.9 + s * 1.3) * 0.6 + Math.sin(t * 4.3 + s * 0.7) * 0.3) / 1.9;
@@ -67,10 +127,13 @@
   async function create(container, opts = {}) {
     const base = opts.base || '/assets/rig/';
     const rig = await (await fetch(base + 'rig.json')).json();
+    const v2 = rig.version === 2;
     const faceNames = ['white', 'inner', 'mask', 'band', 'lid1', 'lid2', 'closed', 'happy'];
     const imgs = {};
-    const jobs = [loadImg(opts.image || '/assets/mira2.jpg').then((i) => (imgs.orig = i)), loadImg(base + 'char-alpha.png').then((i) => (imgs.alpha = i)),
-      loadImg(base + 'bg.jpg').then((i) => (imgs.bg = i)), loadImg(base + 'weights.png').then((i) => (imgs.w = i))];
+    const jobs = v2
+      ? [['orig', 'body.png'], ['room', 'room.jpg'], ['w', 'weights.png'], ['tail', 'tail.png'], ['charm', 'charm.png'], ['table', 'table.png']].map(([k, f]) => loadImg(base + f).then((i) => (imgs[k] = i)))
+      : [loadImg(opts.image || '/assets/mira2.jpg').then((i) => (imgs.orig = i)), loadImg(base + 'char-alpha.png').then((i) => (imgs.alpha = i)),
+        loadImg(base + 'bg.jpg').then((i) => (imgs.bg = i)), loadImg(base + 'weights.png').then((i) => (imgs.w = i))];
     for (const e of ['L', 'R']) for (const n of faceNames) jobs.push(loadImg(`${base}face/eye${e}-${n}.png`).then((i) => (imgs[`eye${e}-${n}`] = i)));
     for (const m of rig.mouthShapes) jobs.push(loadImg(`${base}face/mouth-${m}.png`).then((i) => (imgs['mouth-' + m] = i)));
     await Promise.all(jobs);
@@ -82,7 +145,8 @@
       if (k >= 1) return im;
       const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); return c;
     };
-    const texSrc = { orig: fit(imgs.orig), alpha: fit(imgs.alpha), bg: fit(imgs.bg), w: fit(imgs.w) };
+    const texSrc = v2 ? { orig: fit(imgs.orig), room: fit(imgs.room), w: fit(imgs.w), tail: imgs.tail, charm: imgs.charm, table: fit(imgs.table) }
+      : { orig: fit(imgs.orig), alpha: fit(imgs.alpha), bg: fit(imgs.bg), w: fit(imgs.w) };
     const canvas = document.createElement('canvas'); canvas.className = 'layer rigCanvas';
     const [fx0, fy0, fx1, fy1] = rig.face;
     const face = document.createElement('canvas'); face.width = fx1 - fx0; face.height = fy1 - fy0;
@@ -93,14 +157,16 @@
     function setupGL() {
       gl = canvas.getContext('webgl', { premultipliedAlpha: false, alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power', preserveDrawingBuffer: !!opts.preserve }) || canvas.getContext('experimental-webgl');
       if (!gl) throw new Error('WebGL not available');
-      if (!texSrc.alpha) throw new Error('layers released (lite mode)');
+      if (!(v2 ? texSrc.room : texSrc.alpha)) throw new Error('layers released (lite mode)');
       const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS) && !gl.isContextLost()) throw new Error(gl.getShaderInfoLog(s)); return s; };
-      const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(prog);
+      const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, v2 ? FRAG2 : FRAG)); gl.linkProgram(prog);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS) && !gl.isContextLost()) throw new Error(gl.getProgramInfoLog(prog));
       gl.useProgram(prog);
       const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
       const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      U = {}; for (const n of ['uOrig', 'uAlpha', 'uBg', 'uW', 'uPatch', 'uSize', 'uFace', 'uNeck', 'uHips', 'uBall', 'uRoll', 'uSway', 'uBreath', 'uYaw', 'uPitch', 'uJaw', 'uBrow', 'uFringe', 'uHeadT', 'uHair']) U[n] = gl.getUniformLocation(prog, n);
+      U = {}; for (const n of ['uOrig', 'uAlpha', 'uBg', 'uW', 'uPatch', 'uSize', 'uFace', 'uNeck', 'uHips', 'uBall', 'uRoll', 'uSway', 'uBreath', 'uYaw', 'uPitch', 'uJaw', 'uBrow', 'uFringe', 'uHeadT', 'uHair',
+        'uRoom', 'uBody', 'uTail', 'uCharm', 'uTable', 'uFaceC', 'uFaceR', 'uBodyY', 'uChest', 'uBrowL', 'uBrowR', 'uBrowS', 'uCX', 'uJawSX', 'uJawY', 'uLean',
+        'uTailR', 'uCharmR', 'uTableR', 'uTailA', 'uCharmA', 'uTailAng', 'uCharmAng', 'uTailL', 'uCharmL']) U[n] = gl.getUniformLocation(prog, n);
       const tex = (unit, src, fmt = gl.RGBA) => {
         const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -108,16 +174,31 @@
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texImage2D(gl.TEXTURE_2D, 0, fmt, fmt, gl.UNSIGNED_BYTE, src); return t;
       };
+      if (v2) { setupV2(tex); return; }
       tex(0, texSrc.orig, gl.RGB); tex(1, texSrc.alpha, gl.LUMINANCE); tex(2, texSrc.bg, gl.RGB); tex(3, texSrc.w);   // no unused channels on the GPU
       patchTex = tex(4, face);
       gl.uniform1i(U.uOrig, 0); gl.uniform1i(U.uAlpha, 1); gl.uniform1i(U.uBg, 2); gl.uniform1i(U.uW, 3); gl.uniform1i(U.uPatch, 4);
       gl.uniform2f(U.uSize, rig.width, rig.height); gl.uniform4f(U.uFace, fx0, fy0, fx1 - fx0, fy1 - fy0);
       gl.uniform2f(U.uNeck, ...rig.pivots.neck); gl.uniform2f(U.uHips, ...rig.pivots.hips); gl.uniform3f(U.uBall, ...rig.ball);
     }
+    function setupV2(tex) {
+      tex(0, texSrc.room, gl.RGB); tex(1, texSrc.orig); tex(2, texSrc.w); tex(3, texSrc.tail); tex(4, texSrc.charm); tex(5, texSrc.table);
+      patchTex = tex(6, face);
+      [['uRoom', 0], ['uBody', 1], ['uW', 2], ['uTail', 3], ['uCharm', 4], ['uTable', 5], ['uPatch', 6]].forEach(([n, u]) => gl.uniform1i(U[n], u));
+      const sh = rig.shader, L = rig.layers, v = (n, a) => gl['uniform' + a.length + 'f'](U[n], ...a);
+      v('uSize', [rig.width, rig.height]); v('uFace', [fx0, fy0, fx1 - fx0, fy1 - fy0]);
+      v('uNeck', rig.pivots.neck); v('uHips', rig.pivots.hips); v('uFaceC', rig.pivots.face); v('uFaceR', sh.faceR);
+      v('uBodyY', [sh.bodyTop, sh.bodyBottom]); v('uChest', [sh.chestY, sh.chestH]); v('uCX', [sh.centerX]);
+      v('uJawY', [sh.jaw.y0, sh.jaw.y1, sh.jaw.y2, sh.jaw.y3]); v('uJawSX', [sh.jaw.sx]);
+      v('uBrowL', rig.brows.L); v('uBrowR', rig.brows.R); v('uBrowS', rig.brows.size);
+      v('uTailR', L.tail.rect); v('uTailA', L.tail.anchor); v('uTailL', [L.tail.length]);
+      v('uCharmR', L.charm.rect); v('uCharmA', L.charm.anchor); v('uCharmL', [L.charm.length]); v('uTableR', L.table.rect);
+    }
     setupGL();
     // lean (lite) mode: the full-size layer pictures are on the GPU now, so let the page drop its copies (phones have little
     // memory; iOS Safari kills the tab around 300-400 MB). A context loss then falls back to the still picture instead.
-    if (opts.lean) { texSrc.alpha = texSrc.bg = texSrc.w = null; imgs.alpha = imgs.bg = imgs.w = null; }
+    // (v2 keeps only the body picture: the face canvas is cut from it every frame)
+    if (opts.lean) { for (const k of ['alpha', 'bg', 'w', 'room', 'tail', 'charm', 'table']) { texSrc[k] = null; imgs[k] = null; } texSrc.orig = v2 ? null : texSrc.orig; }
 
     // ---------------------------------------------------------------- animation state
     const R = rng(opts.seed || 7);
@@ -126,6 +207,7 @@
       roll: 0, yaw: 0, pitch: 0, headX: 0, headXv: 0, hair: { x: 0, v: 0 }, hairY: { x: 0, v: 0 }, fringe: { x: 0, v: 0 },
       gaze: { x: 0, y: 0, tx: 0, ty: 0, next: 1.2 }, blink: { next: 1.5, start: -1, dbl: false, frames: null },
       gestures: [], listenSide: 1, mouth: { cur: null, prev: null, f: 1 }, lastShape: null, smile: 0, idleSmileNext: 6, idleSmileUntil: 0,
+      lean: 0, tail1: { x: 0, v: 0 }, tail2: { x: 0, v: 0 }, charm: { x: 0, v: 0 }, charm2: { x: 0, v: 0 }, swayPrev: 0,
     };
     const BLINK = [['lid1', 0.035], ['lid2', 0.035], ['closed', 0.075], ['lid2', 0.04], ['lid1', 0.045]];
 
@@ -137,6 +219,10 @@
       else if (kind === 'think') { S.thinkUntil = t + (opt.seconds || 3); }
       else if (kind === 'brow') S.browKick = 1;
       else if (kind === 'blink') S.blink.next = t;
+      // greet: a small welcoming bow with a head tilt and a smile; thanks: a deeper, slower bow with happy (closed) eyes
+      else if (kind === 'greet') { S.gestures.push({ kind: 'bow', t0: t, dur: 1.5, amp: opt.amp || 1, tilt: R() < 0.5 ? -1 : 1 }); S.happyUntil = Math.max(S.happyUntil || 0, t + (opt.seconds || 2.2)); S.browKick = 0.8; S.charm.v += 0.12; }
+      else if (kind === 'thanks') { S.gestures.push({ kind: 'bow', t0: t, dur: 2.0, amp: 1.6 * (opt.amp || 1), tilt: 0 }); S.happyUntil = Math.max(S.happyUntil || 0, t + (opt.seconds || 2.6)); S.charm.v += 0.2; }
+      else if (kind === 'question') gesture('listen', opt);
     }
 
     function spring(s, target, k, c, dt) { const a = -k * (s.x - target) - c * s.v; s.v += a * dt; s.x += s.v * dt; }
@@ -161,14 +247,21 @@
       roll += S.listen * 0.045 * S.listenSide; pitch -= S.listen * 1.6; yaw += S.listen * 1.5 * S.listenSide;
       pitch += S.think * 2.4; roll += S.think * 0.02;
       roll += S.happy * 0.022 * Math.sin(t * 2.1);
+      let lean = 0;
       for (const g of S.gestures) {
         const u = (t - g.t0) / g.dur; if (u < 0 || u > 1) continue;
+        if (g.kind === 'bow') {
+          // down quickly, hold, come back up slowly
+          const k = u < 0.3 ? ease(u / 0.3) : u < 0.5 ? 1 : 1 - ease((u - 0.5) / 0.5);
+          lean += 9 * g.amp * k; pitch += 4.5 * g.amp * k; roll += 0.035 * g.tilt * Math.sin(Math.PI * u); yaw += 1.2 * g.tilt * Math.sin(Math.PI * u);
+          continue;
+        }
         // two dips, the second smaller (a natural "yes, welcome" nod)
         const nod = u < 0.5 ? Math.sin(Math.PI * u / 0.5) : 0.55 * Math.sin(Math.PI * (u - 0.5) / 0.5);
         pitch += 5.2 * g.amp * nod; roll += 0.01 * g.amp * nod;
       }
       S.gestures = S.gestures.filter((g) => t - g.t0 < g.dur);
-      S.roll = roll; S.yaw = yaw; S.pitch = pitch;
+      S.roll = roll; S.yaw = yaw; S.pitch = pitch; S.lean = lean;
       const breath = (1 - Math.cos((2 * Math.PI * t) / (speaking ? 3.6 : 4.4))) / 2;
       S.breath = 2.1 * breath;
       S.sway = 0.0045 * noise(t * 0.12, 5) + 0.0015 * S.talk * Math.sin(t * 0.9);
@@ -179,6 +272,12 @@
       spring(S.hair, clamp(-0.09 * S.headXv, -4, 4) + 0.55 * noise(t * 0.45, 21), 38, 5.5, dt);
       spring(S.hairY, -0.05 * S.breath, 30, 6, dt);
       spring(S.fringe, clamp(-0.05 * S.headXv, -2, 2) + 0.3 * noise(t * 0.6, 31), 55, 7, dt);
+      // ponytail: a 2-link spring chain (root angle + tip bend lagging behind); charm: a pendulum swung by the body
+      spring(S.tail1, clamp(0.0011 * S.headXv, -0.07, 0.07) + 0.012 * noise(t * 0.37, 41), 26, 3.4, dt);
+      spring(S.tail2, S.tail1.x * 0.9 + 0.006 * noise(t * 0.8, 43), 15, 2.2, dt);
+      const swayV = (S.sway - S.swayPrev) / Math.max(dt, 1e-3); S.swayPrev = S.sway;
+      spring(S.charm, clamp(0.9 * swayV * 160 / 9.8, -0.12, 0.12) + 0.01 * noise(t * 0.29, 47) - 0.004 * S.lean, 30, 1.3, dt);
+      spring(S.charm2, S.charm.x * 0.6, 40, 4, dt);
 
       // brows: lift when listening, on emphasis while speaking
       if (speaking && inp.open > 0.8 && S.lastOpen <= 0.8 && R() < 0.12) S.browKick = Math.max(S.browKick, 0.7);
@@ -211,11 +310,12 @@
 
       // mouth shape
       let shape = speaking ? inp.shape || null : null;
+      if (shape && !imgs['mouth-' + shape] && shape in MOUTH_FALLBACK) shape = MOUTH_FALLBACK[shape];
       if (shape === 'rest') shape = null;
       if (!speaking) {
         if (t > S.idleSmileNext && S.idleSmileUntil < t) { S.idleSmileUntil = t + 2 + R() * 3; S.idleSmileNext = t + 9 + R() * 12; }
         if (S.happy > 0.4 || S.idleSmileUntil > t) shape = 'smile';
-      } else if (S.happy > 0.5 && (shape === 'E' || shape === 'small' || shape === 'A')) shape = 'happy';
+      } else if (S.happy > 0.5 && (shape === 'E' || shape === 'I' || shape === 'small' || shape === 'A')) shape = 'happy';
       const M = S.mouth;
       if (shape !== M.cur) { M.prev = M.f > 0.5 ? M.cur : M.prev; M.cur = shape; M.f = 0; }
       M.f = Math.min(1, M.f + dt / (speaking ? 0.045 : 0.16));
@@ -239,10 +339,11 @@
       }
       // blush when happy
       if (S.happy > 0.02) {
-        for (const [x, y] of [[437, 548], [522, 548]]) {
-          const g = fc.createRadialGradient(x - fx0, y - fy0, 0, x - fx0, y - fy0, 13);
+        const br = v2 ? 17 : 13;
+        for (const [x, y] of rig.blush || [[437, 548], [522, 548]]) {
+          const g = fc.createRadialGradient(x - fx0, y - fy0, 0, x - fx0, y - fy0, br);
           g.addColorStop(0, `rgba(255,120,130,${0.2 * S.happy})`); g.addColorStop(1, 'rgba(255,120,130,0)');
-          fc.fillStyle = g; fc.fillRect(x - fx0 - 14, y - fy0 - 14, 28, 28);
+          fc.fillStyle = g; fc.fillRect(x - fx0 - br - 1, y - fy0 - br - 1, 2 * br + 2, 2 * br + 2);
         }
       }
       const M = S.mouth, [mx0, my0] = rig.mouth.box;
@@ -255,17 +356,22 @@
     function render() {
       if (api.lost || !gl || gl.isContextLost()) return;
       drawFace();
-      gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, patchTex);
+      gl.activeTexture(gl.TEXTURE0 + (v2 ? 6 : 4)); gl.bindTexture(gl.TEXTURE_2D, patchTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, face);
       gl.uniform1f(U.uRoll, S.roll); gl.uniform1f(U.uSway, S.sway); gl.uniform1f(U.uBreath, S.breath);
       gl.uniform1f(U.uYaw, S.yaw); gl.uniform1f(U.uPitch, S.pitch); gl.uniform1f(U.uJaw, S.jaw); gl.uniform1f(U.uBrow, S.brow);
       gl.uniform1f(U.uFringe, S.fringe.x); gl.uniform2f(U.uHeadT, 0, 0); gl.uniform2f(U.uHair, S.hair.x, S.hairY.x);
+      if (v2) {
+        const jk = rig.shader.jaw.k || 1.2;
+        gl.uniform1f(U.uJaw, S.jaw * jk); gl.uniform1f(U.uLean, S.lean);
+        gl.uniform2f(U.uTailAng, S.tail1.x, S.tail2.x - S.tail1.x); gl.uniform2f(U.uCharmAng, S.charm.x, S.charm2.x - S.charm.x);
+      }
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     const api = {
-      canvas, rig, state: S, gesture,
+      canvas, rig, state: S, gesture, version: v2 ? 2 : 1,
       /** Backing size: never more pixels than her painting has (941x1672); the browser scales the canvas up for free.
        *  (It used to be CSS size x devicePixelRatio: about 2100x3700 in a 1080x1920 LIVE Studio source at 150% Windows scaling,
        *  ~8 million shaded pixels with 9 texture reads each, 60+ times a second.) opts.scale < 1 makes it lighter still. */

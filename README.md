@@ -201,6 +201,22 @@ Body language: she **nods** when she welcomes people, **tilts her head and raise
 The mouth shape comes from her voice: the MP3 is analysed 100 times per second for loudness (how open) and spectrum (which shape). Low, dark vowels give O/U, bright ones and "s/sh" give E/I (teeth), open vowels give A, and silence closes the mouth. Rebuild the rig after changing the art with `python tools/build-rig.py` (needs `opencv-python-headless`, `numpy`, `pillow`, `rembg`).
 If WebGL is not available, the overlay falls back to the still picture by itself.
 
+**Mira v2, "Tarot Mistress" (preview, not the default).** Open the overlay with `?char=v2` (for example `/overlay?char=v2&key=YOUR_KEY`), or set `overlay.character.char: "v2"` in `config.json`. Without it, the original painting rig above is used. v2 is a new character drawn for animation, with rose-silver hair in a side ponytail, a plum hooded mantle and a tarot-card charm. Her rig is layered rather than one painting (`public/assets/rig-v2/`, built by `tools/build-rig-v2.py` from `src/char.png`, `src/room.jpg` and `src/table.png`):
+
+| File (`public/assets/rig-v2/`) | Used for |
+|---|---|
+| `room.jpg` | The empty room behind her (static). |
+| `body.png` | Her body and head, with the ponytail and charm cut out and the cloth under them painted in. |
+| `tail.png`, `charm.png` | The ponytail (hanging from the ribbon) and the chain + tarot card, each a separate layer. The ponytail is a 2-link spring chain pinned to the ribbon knot. The charm is a pendulum pinned to the belt. |
+| `table.png` | The velvet table, cards and crystal ball in front of her (static). |
+| `weights.png` | Head + side hair (R), side-hair sway (G), fringe (B), body breathing/bow (A). |
+| `face/eye*-…png` | Gaze (whites, iris, lash band), blink steps `lid1`/`lid2`/`closed`, and happy eyes. |
+| `face/mouth-*.png` | Visemes from her own lips: rest, M/B/P, smile, small, I, E, F/V, A, O, U, happy. |
+| `parts/` | Every part as a full-frame transparent layer (and `face-base.png` with the mouth painted out), for editing. |
+| `rig.json` | All coordinates the renderer uses: face, eyes, mouth, pivots, brows, jaw, layer rects and anchors, crystal ball. |
+
+Lip sync uses the same voice analysis with three extra shapes. **I** is a bright vowel with a narrow opening. **F/V** is a soft hiss with a small opening. **M/B/P** is a short stop between two voiced sounds, so the lips press together. The old rig, which has no drawings for these shapes, shows E / small / closed instead. Gestures: she gives a small **bow with a head tilt and a smile** when she greets someone, a **deeper bow with happy eyes** when she thanks someone for a gift, and a **listening tilt with raised brows** for questions. Her hands rest behind the table, so there are no arm or hand poses. She uses the same lite mode and context-loss handling as the old rig. On a phone the canvas is 1080x1920 (2 MP). A demo is in `screenshots/mira-v2-demo.mp4` (`node tools/render-v2-demo.mjs`).
+
 **Video mode.** A generated idle clip of Mira (breathing, blinking, candles, crystal ball, smoke, mouth closed) loops underneath, and the lip-sync mouth is laid on top of her face and follows it frame by frame.
 
 | File | Used for |

@@ -22,7 +22,7 @@ test('overlay never reloads itself; rig restores after a WebGL context loss; spe
   // backing canvas is capped at the painting's own width (941 px), never CSS size x devicePixelRatio
   assert.match(rig, /Math\.min\(1, \(rig\.width \* \(opts\.scale \|\| 1\)\)/);
   // lite mode stays sharp on phones: full painting resolution, full-size textures (565x1003 / 1024 px looked blurred on an iPhone)
-  assert.match(ov, /scale: 1, maxTex: 2048/);
+  assert.match(ov, /scale: lite && charV2\(\) \? 0\.87 : 1, maxTex: 2048/);   // old rig: full painting resolution; v2: the same pixel budget
 });
 
 test('TikFinity status from overlays is only re-broadcast when it changes', () => {

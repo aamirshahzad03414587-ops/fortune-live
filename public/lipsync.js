@@ -54,8 +54,10 @@
   }
 
   // ------------------------------------------------------------------ mouth shapes for the 2D rig
-  // Shapes: 0 rest · 1 small · 2 E (ee/i/s, teeth) · 3 A (ah) · 4 O (oh) · 5 U (oo/w)
-  const SHAPES = ['rest', 'small', 'E', 'A', 'O', 'U'];
+  // Shapes: 0 rest · 1 small · 2 E (eh/s, teeth) · 3 A (ah) · 4 O (oh) · 5 U (oo/w)
+  //         6 I (ee: wide, nearly closed, teeth) · 7 FV (f/v: lower lip under the teeth) · 8 MBP (m/b/p: lips pressed)
+  // Rigs without a drawing for 6-8 fall back to E / small / rest (public/rig.js MOUTH_FALLBACK).
+  const SHAPES = ['rest', 'small', 'E', 'A', 'O', 'U', 'I', 'FV', 'MBP'];
   function fft(re, im) {
     const n = re.length;
     for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
@@ -105,25 +107,32 @@
       if (v < o.tO || raw[i] === 0) { want[i] = 0; continue; }
       const rel = cent[i] / med;
       let s;
-      if (sib[i] > 0.45) s = v < 0.5 ? 1 : 2;
+      if (sib[i] > 0.45) s = v < 0.35 && sib[i] < 0.7 ? 7 : v < 0.5 ? 1 : 2;   // soft, broad hiss: f / v; strong: s / sh
       else if (rel < 0.8) s = v > 0.5 ? 4 : 5;
-      else if (rel > 1.22 || front[i] > 1.4) s = 2;
+      else if (rel > 1.22 || front[i] > 1.4) s = v < 0.55 ? 6 : 2;
       else s = v > 0.5 ? 3 : 1;
       want[i] = s;
     }
+    // a short dip to (near) silence between two voiced stretches is a closure: m / b / p press the lips together
+    for (let i = 0; i < n; i++) {
+      if (want[i] !== 0) continue;
+      let j = i; while (j < n && want[j] === 0) j++;
+      if (i > 0 && j < n && j - i <= 12 && want[i - 1] !== 0) for (let k = i; k < j; k++) want[k] = 8;
+      i = j;
+    }
     // majority over 5 frames, then hold >= 60 ms (closing on real silence right away)
-    const out = new Uint8Array(n), cnt = new Uint8Array(6);
+    const out = new Uint8Array(n), cnt = new Uint8Array(SHAPES.length);
     let cur = 0, since = 99;
     for (let i = 0; i < n; i++) {
       cnt.fill(0); for (let k = Math.max(0, i - 2); k <= Math.min(n - 1, i + 2); k++) cnt[want[k]]++;
-      let best = want[i]; for (let s = 0; s < 6; s++) if (cnt[s] > cnt[best]) best = s;
+      let best = want[i]; for (let s = 0; s < SHAPES.length; s++) if (cnt[s] > cnt[best]) best = s;
       if (best !== cur && (since >= 6 || (best === 0 && raw[i] === 0))) { cur = best; since = 0; } else since++;
       out[i] = cur;
     }
     return out;
   }
 
-  /** { shape: 'rest'|'small'|'E'|'A'|'O'|'U', open: 0..1 } at time t (seconds into the clip). */
+  /** { shape: 'rest'|'small'|'E'|'A'|'O'|'U'|'I'|'FV'|'MBP', open: 0..1 } at time t (seconds into the clip). */
   function shapeAt(track, t) {
     if (!track || t < 0) return { shape: 'rest', open: 0 };
     const i = Math.floor(t * track.fps);
@@ -149,7 +158,7 @@
         for (const g of groups) {
           if (!/[aeiouy]/.test(g)) continue;
           const shape = /a|o/.test(g) ? (g.includes('o') || g.includes('u') ? 1 : 3) : /e|i|y/.test(g) ? 2 : 1;
-          const rs = g.includes('o') ? 4 : g.includes('u') ? 5 : g.includes('a') ? 3 : 2;   // rig shape
+          const rs = g.includes('o') ? 4 : g.includes('u') ? 5 : g.includes('a') ? 3 : /^(i|ee|y)$/.test(g) ? 6 : 2;   // rig shape
           for (let j = 0; j < per; j++) { const idx = f + k * per + j; if (idx >= n) break; const edge = j === 0 || j === per - 1; vis[idx] = edge ? Math.min(shape, 1) : shape; open[idx] = OPEN[vis[idx]]; shp[idx] = edge ? 1 : rs; }
           k++;
         }
