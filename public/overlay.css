@@ -2,7 +2,7 @@
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; overflow:hidden; background: transparent; }
 body { font-family: 'Quicksand', 'Segoe UI', sans-serif; color: var(--ink); }
-#root { position:absolute; left:0; top:0; transform-origin: 0 0; overflow:hidden; background:#140a1e; }
+#root { position:fixed; left:0; top:0; transform-origin: 0 0;  /* fixed: the 1080 px-wide stage must not widen a phone's layout viewport (it made innerWidth 1080, so nothing was scaled down) */ overflow:hidden; background:#140a1e; }
 #root.landscape { width:1920px; height:1080px; }
 
 /* ---------- scene ---------- */
@@ -209,3 +209,10 @@ section, aside { transition: opacity .5s, transform .5s; }
 .vertical #footer { left:auto; right:124px; bottom:auto; top:calc(var(--u) * 90.5); width:0; height:0; font-size:15px; white-space:nowrap; transform:rotate(-90deg); transform-origin:0 0; text-align:left; opacity:.75; }
 #revQ { display:none; font-size:30px; font-weight:700; color:var(--gold); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 .lite #bgBlur { filter: brightness(.5); }   /* lite: no full-screen blur */
+/* lite (phones): fewer full-screen compositor layers. At 3x on an iPhone every full-stage layer costs ~12-16 MB of GPU memory. */
+.lite #body, .lite #mouth, .lite #pTrack, .lite #sceneTrack, .lite .glow { will-change: auto; }
+.lite #warm { display:none; }
+.lite #flash:not(.go) { display:none; }
+.lite #prophecy:not(.on) { display:none; }
+.lite #mist.idle { display:none; }
+.lite #sparkles { display:none; }

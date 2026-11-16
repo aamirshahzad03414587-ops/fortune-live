@@ -370,7 +370,9 @@
       }
     }
     // prophecy mist from the skull's eyes (follows the skull in video mode)
-    mx.clearRect(0, 0, W, H);
+    const mistIdle = !mistOn && !mistParts.length;
+    if (lite && mist.classList.contains('idle') !== mistIdle) mist.classList.toggle('idle', mistIdle);
+    if (!mistIdle || !lite) mx.clearRect(0, 0, W, H);
     if (mistOn || mistParts.length) {
       const SA = video ? Vid.A('skull') : ID, sx = W / 100, sy = H / 100;
       if (mistOn) for (const e of Char.eyes || []) if (Math.random() < 0.5 * k) { const [ex, ey] = mapPt(SA, e.x * sx, e.y * sy); mistParts.push({ x: ex + (Math.random() - 0.5) * W * 0.012, y: ey, vx: (Math.random() - 0.5) * 0.5, vy: -(0.5 + Math.random() * 0.8), r: W * 0.007, life: 1, sw: Math.random() * 6.28 }); }
