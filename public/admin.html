@@ -143,8 +143,8 @@ const api = async (p, body) => { const r = await fetch('/api/admin' + p, { metho
 const log = (t) => { const l = $('log'); l.innerHTML = `<div>${new Date().toLocaleTimeString()} ${String(t).replace(/</g, '&lt;')}</div>` + l.innerHTML; };
 let config, voices = [];
 const k = key ? '?key=' + key : '';
-$('u1').textContent = location.origin + '/overlay' + k;
-$('u2').textContent = location.origin + '/overlay' + (k ? k + '&' : '?') + 'layout=landscape';
+$('u1').textContent = location.origin + '/overlay';
+$('u2').textContent = location.origin + '/overlay?layout=landscape';
 async function load() {
   const s = await api('/state'); config = s.config; voices = s.voices || []; fill(); if (s.ttsError) $('vErr').textContent = 'Last voice error: ' + s.ttsError; status(s.tiktok); renderQueue(s.live); $('subs').textContent = s.submissions;
   $('u3').textContent = (config.publicUrl || location.origin) + '/';

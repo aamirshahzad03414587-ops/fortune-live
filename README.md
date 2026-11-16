@@ -102,7 +102,7 @@ Dates: `12/05/1998`, `12-5-1998`, `12.05.98`, `12 May 1998`, `12th of May, 1998`
 3. In **Environment**, set `ADMIN_KEY` to a long secret, plus optionally `PUBLIC_URL` (your Render URL).
 4. Your links become:
    * Form, for your bio: `https://your-app.onrender.com/`
-   * Overlay, for LIVE Studio / OBS: `https://your-app.onrender.com/overlay?key=YOUR_ADMIN_KEY`
+   * Overlay, for LIVE Studio / OBS: `https://your-app.onrender.com/overlay (no key needed)`
    * Control panel: `https://your-app.onrender.com/admin?key=YOUR_ADMIN_KEY`
 
    The overlay still runs in LIVE Studio on your PC, so it can hear TikFinity at `ws://127.0.0.1:21213/`. The Render server never connects to TikTok.

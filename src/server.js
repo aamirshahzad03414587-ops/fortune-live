@@ -41,7 +41,7 @@ const formOn = () => !!live.readingsCfg.privateForm;
 const formOnly = (req, res, next) => (formOn() ? next() : res.status(404).json({ error: 'The private form is turned off. Comment your name and birth date on the LIVE instead.' }));
 app.get('/', (req, res) => res.sendFile(path.join(pub, formOn() ? 'form.html' : 'home.html')));
 app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report.html')));
-app.get('/overlay', requireKey, (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
+app.get('/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
 app.get('/tts/:id.mp3', (req, res) => {
   const buf = tts.get(req.params.id);
@@ -141,7 +141,8 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
   const fakeReq = { query: Object.fromEntries(url.searchParams), headers: req.headers, socket: req.socket };
-  if (url.pathname !== '/ws' || !keyOk(fakeReq)) { socket.destroy(); return; }
+  if (url.pathname !== '/ws') { socket.destroy(); return; }
+  void fakeReq; // overlay + its socket are public (no key needed); admin pages/API still require the key
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
 });
 const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
@@ -192,8 +193,8 @@ server.listen(config.port, () => {
   const k = config.adminKey ? `?key=${config.adminKey}` : '';
   console.log('\n🔮  Fortune Live is running');
   console.log(`   Viewer form (put this link in bio): ${config.publicUrl || base}/`);
-  console.log(`   OBS overlay vertical 1080x1920:   ${base}/overlay${k}`);
-  console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay${k ? k + '&' : '?'}layout=landscape`);
+  console.log(`   OBS overlay vertical 1080x1920:   ${base}/overlay`);
+  console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay?layout=landscape`);
   console.log(`   Control panel + simulator:        ${base}/admin${k}`);
   if (!config.adminKey) console.log('   (No adminKey set: overlay and admin only open on this PC. Set "adminKey" in config.json before hosting online.)');
   console.log('   LIVE events come from the TikFinity desktop app on the streaming PC (ws://127.0.0.1:21213/). This server never connects to TikTok.');
