@@ -77,7 +77,7 @@ test('priority: gift thanks before welcomes, welcomes interleave with chat repli
 test('a busy chat slows welcomes down (every 2x joinGreetSeconds)', () => {
   const { live, clock } = setup();
   live.handleJoin({ userId: 'a', nickname: 'Ali' }); clock.t += 3000; live.nextJob();
-  for (let i = 0; i < 5; i++) live.handleChat({ userId: 'q' + i, nickname: 'Q' + i, comment: 'what is my lucky number?' });
+  for (let i = 0; i < 5; i++) live.handleChat({ userId: 'q' + i, nickname: 'Q' + i, comment: `what is my lucky number, Q${i}?` });   // different texts: identical ones are dropped as spam
   live.handleJoin({ userId: 'b', nickname: 'Sara' });
   clock.t += 12000;
   assert.equal(live.welcomeWait() > 0, true);

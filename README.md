@@ -251,6 +251,14 @@ Both modes:
 * **Quiet chat:** after `idlePromptSeconds` with nothing happening, she asks the audience something (for example, to comment their birth day and month). Add your own questions in the box.
 * Viewers who comment a birth day and month (for example "14 March" or "14/3/1996") get their Birthday number and Personal Year 2026 spoken back. With a year, they also get their Life Path number. She never asks for private details in public and points people to the private form.
 
+### Free AI replies, no key (default on Render)
+Set the environment variable `LLM_PROVIDER=pollinations` (the Render service has it). Mira then answers anything viewers ask with the free, keyless Pollinations text API, in their language (Urdu or Arabic script, Hindi in Devanagari, Roman Urdu, Spanish ...), starting with their name, 1–3 short sentences, TikTok-safe.
+* **Free limits:** about **1 reply every 45 seconds per server IP**, 5–20 s per reply, best effort (no uptime promise; Render's outgoing IP may be shared). Mira keeps one request in flight, waits the gap, honours the provider's "retry after", caches repeated questions for 5 minutes and drops copy-paste spam. Everything the AI can't take in time gets her built-in replies, so she never goes silent. Questions and answers to her own questions get the AI first.
+* **Conversations:** she remembers each viewer for the stream (last 6 exchanges, birth date, zodiac, topic, language; 300 viewers max, cleared on every new stream). She sometimes ends with a question ("love or career?"); that viewer's next comment within 3 minutes skips the cooldown and continues the thread. Nobody gets more than 2 replies in a row while others wait. When it's quiet she sometimes asks an active chatter something by name.
+* **Birth dates in any style:** "12 feburary 98", "twelfth of agust", "12051998", "١٢/٠٥/١٩٩٨", "۱۲ مئی ۱۹۹۸", "5 janwari 2000", name before or after. No year → a Birthday + Personal Year reading. Impossible dates (31/02) → she asks "which date did you mean?" and the viewer's reply completes the reading. Dates the rules can't read go to the AI. `readings.askAmbiguous: true` makes her ask "5 December or 12 May?" for 05/12 dates (default: day first).
+* Numbers in readings are always computed by code, never by the AI. Turn it off with `LLM_ENABLED=0`. Other keyless OpenAI-compatible servers: `LLM_BASE_URL` + `LLM_MODEL` + `LLM_NO_KEY=1`.
+* Her voice is `en-US-AvaMultilingualNeural`, which speaks every language in the same voice.
+
 ### Optional AI replies (any OpenAI-compatible API)
 Without a key, Mira uses her built-in reply engine, which is free, offline and doesn't repeat itself much. To give her fresh, smarter replies in any language:
 1. Get an API key from a provider, for example xAI (`https://api.x.ai/v1`), OpenAI (`https://api.openai.com/v1`), OpenRouter (`https://openrouter.ai/api/v1`) or Groq (`https://api.groq.com/openai/v1`).

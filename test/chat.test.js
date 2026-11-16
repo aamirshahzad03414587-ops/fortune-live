@@ -178,6 +178,7 @@ test('LLM errors fall back to rule replies; LLM used when configured', async () 
   live.handleChat({ userId: 'a', nickname: 'Ali', comment: 'hello' });
   assert.equal((await s).source, 'rules');
   live.paused = true; live.skip(); live.paused = false;
+  live.ai.nextAt = 0;   // the request gate keeps a gap after every request (also failed ones); open it for the test
   live.llm = async () => 'Hello Sara, the moon adores you.';
   s = new Promise((r) => live.once('say', r));
   live.handleChat({ userId: 'b', nickname: 'Sara', comment: 'hi' });

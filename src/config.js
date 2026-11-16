@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PROVIDERS } from './ai.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const CONFIG_PATH = process.env.CONFIG_PATH || path.join(ROOT, 'config.json');
@@ -28,10 +29,13 @@ const DEFAULTS = {
     },
     effects: { sparkles: true, sparkleCount: 28, ballGlow: true, floatingCards: false },
   },
-  voice: { enabled: true, voice: 'en-US-AvaNeural', urduVoice: 'ur-PK-UzmaNeural', hindiVoice: 'hi-IN-SwaraNeural', rate: '+2%', pitch: '+6%', browserLang: 'en-US', readingSpeechStart: 3, talkSpeechStart: 0.6, tailSeconds: 0.8, minSaySeconds: 3 },
+  voice: { enabled: true, voice: 'en-US-AvaMultilingualNeural', urduVoice: '', hindiVoice: '', rate: '+2%', pitch: '+6%', browserLang: 'en-US', readingSpeechStart: 3, talkSpeechStart: 0.6, tailSeconds: 0.8, minSaySeconds: 3 },
   chat: { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 0.6, prefetchReplies: 2, idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, greetDelaySeconds: 4, maxReplyWords: 35,
     welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 6, readQuestionAloud: true },
-  llm: { enabled: false, baseUrl: '', apiKey: '', model: '', temperature: 0.9, maxTokens: 120, timeoutMs: 8000, extraPersona: '' },
+  // AI chat replies (any OpenAI-compatible API). noKey: keyless providers (no Authorization header). provider: a preset
+  // from src/ai.js PROVIDERS (LLM_PROVIDER=pollinations: free, no key). minIntervalSeconds: gap between requests
+  // (the provider's Retry-After is honoured on top); cacheSeconds: identical questions reuse the answer.
+  llm: { enabled: false, provider: '', baseUrl: '', apiKey: '', noKey: false, model: '', temperature: 0.9, maxTokens: 120, timeoutMs: 8000, minIntervalSeconds: 3, cacheSeconds: 300, reasoningEffort: '', extraPersona: '' },
 };
 
 function merge(base, over) {
@@ -54,6 +58,13 @@ export function loadConfig() {
   if (process.env.LIVE_SOURCE) cfg.tiktok.liveSource = process.env.LIVE_SOURCE;
   if (process.env.SIGN_API_KEY) cfg.tiktok.signApiKey = process.env.SIGN_API_KEY;
   if (process.env.LLM_API_KEY) { cfg.llm.apiKey = process.env.LLM_API_KEY; if (process.env.LLM_BASE_URL) cfg.llm.baseUrl = process.env.LLM_BASE_URL; if (process.env.LLM_MODEL) cfg.llm.model = process.env.LLM_MODEL; }
+  // free / keyless AI: LLM_PROVIDER=pollinations, or LLM_BASE_URL + LLM_MODEL + LLM_NO_KEY=1 (LLM_ENABLED=0 turns it off)
+  const prov = PROVIDERS[String(process.env.LLM_PROVIDER || '').toLowerCase()];
+  if (prov) cfg.llm = { ...cfg.llm, ...prov, provider: String(process.env.LLM_PROVIDER).toLowerCase(), enabled: true, apiKey: '' };
+  if (process.env.LLM_NO_KEY === '1' && process.env.LLM_BASE_URL) { cfg.llm = { ...cfg.llm, enabled: true, noKey: true, apiKey: '', baseUrl: process.env.LLM_BASE_URL }; if (process.env.LLM_MODEL) cfg.llm.model = process.env.LLM_MODEL; }
+  if (process.env.LLM_TIMEOUT_MS) cfg.llm.timeoutMs = Number(process.env.LLM_TIMEOUT_MS);
+  if (process.env.LLM_ENABLED === '0') cfg.llm.enabled = false;
+  if (process.env.TTS_VOICE) cfg.voice.voice = process.env.TTS_VOICE;
   cfg.tiers = [...cfg.tiers].sort((a, b) => a.minDiamonds - b.minDiamonds);
   return cfg;
 }

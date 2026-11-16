@@ -132,8 +132,21 @@ admin.post('/sim/comment', (req, res) => {
 });
 admin.post('/say', (req, res) => { live.sayNow(String(req.body.text || 'Hello my dears, I am Mystic Mira.').slice(0, 400)); res.json({ ok: true }); });
 admin.post('/test-llm', async (req, res) => {
-  try { const L = { ...config.llm, ...(req.body || {}) }; if (L.apiKey === MASK) L.apiKey = config.llm.apiKey; res.json({ ok: true, text: await llmReply(L, { nickname: 'Tester', comment: req.body.comment || 'Hi Mira, will I be lucky this year?', liveReadings: !!live.readingsCfg.fromComments }) }); }
-  catch (e) { res.status(400).json({ error: e.message }); }
+  // goes through the same request gate as the live chat (free providers allow ~1 request / 45 s): if the slot is
+  // taken, answer 429 with retryAfter instead of hitting the provider
+  const t = Date.now();
+  try {
+    const b = req.body || {}, L = { ...config.llm, enabled: true };
+    for (const k of ['baseUrl', 'model', 'apiKey']) if (b[k]) L[k] = b[k];
+    if (L.apiKey === MASK) L.apiKey = config.llm.apiKey;
+    const nickname = String(b.nickname || 'Tester').slice(0, 40), comment = String(b.comment || 'Hi Mira, will I be lucky this year?').slice(0, 200);
+    const r = await live.ai.ask(L, { comment, name: nickname, cacheable: false },
+      () => llmReply(L, { nickname, comment, liveReadings: !!live.readingsCfg.fromComments }));
+    res.json({ ok: true, text: r.text, ms: Date.now() - t, provider: L.provider || L.baseUrl, model: L.model });
+  } catch (e) {
+    const retryAfter = e.refused ? Math.ceil(live.ai.wait()) : e.retryAfter;
+    res.status(e.refused ? 429 : 400).json({ error: e.message, retryAfter, ms: Date.now() - t });
+  }
 });
 admin.post('/test-tts', async (req, res) => { const r = await tts.synth(req.body.text || 'Hello, I am Mystic Mira.'); res.json(r ? { ok: true, ...r } : { ok: false, error: tts.lastError || 'TTS disabled' }); });
 admin.post('/sim/like', (req, res) => { live.handleLike({ nickname: req.body.nickname || 'Viewer', count: Number(req.body.count || 10) }); res.json({ ok: true }); });

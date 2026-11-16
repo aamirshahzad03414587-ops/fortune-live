@@ -2,45 +2,23 @@
 // Finds a full birth date (with year), a name (or falls back to the TikTok display name), optional parents' names
 // and an optional question. Pure functions, no I/O.
 import { spokenName } from './chat.js';
+import { findDates, MONTH_NAMES as MN, ord as ordinal } from './dates.js';
+import { classifyQuestion } from './numerology.js';
 import { NUMBER_TITLES, QUESTION_GUIDANCE } from './meanings.js';
 import { choose, READING_T, LP_SHORT, PY_SHORT, SOUL_SHORT, EXPR_SHORT } from './variety.js';
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-const MONTH_WORD = '(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)';
-const monthNum = (w) => MONTHS.indexOf(String(w).toLowerCase().slice(0, 3)) + 1;
-const fullYear = (y) => { y = +y; return y >= 100 ? y : y > 26 ? 1900 + y : 2000 + y; };
-
-function valid(day, month, year) {
-  if (!(year >= 1900 && year <= 2026 && month >= 1 && month <= 12 && day >= 1)) return null;
-  const dim = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return day <= dim ? { day, month, year } : null;
-}
+// dates: the forgiving reader in dates.js (typos, ordinals, words, 2-digit years, no separators, other scripts)
 
 /**
- * Finds a full birth date. Returns { day, month, year, start, end, text } or null.
+ * Finds a full birth date (with a year). Returns { day, month, year, start, end, text } or null.
  * Numeric dates are read DD/MM/YYYY; when the second number can't be a month (> 12), MM/DD/YYYY.
  */
 export function findBirthDate(text) {
-  const s = String(text || '');
-  const tries = [
-    // 1998-05-12, 1998/5/12, 1998.05.12
-    [/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/, (m) => valid(+m[3], +m[2], +m[1])],
-    // 12/05/1998, 12-5-1998, 12.05.98
-    [/\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})\b/, (m) => { const a = +m[1], b = +m[2], y = fullYear(m[3]); return b > 12 && a <= 12 ? valid(b, a, y) : valid(a, b, y); }],
-    // 12 May 1998, 12th of May, 1998
-    [new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:of\\s+)?${MONTH_WORD}\\.?,?\\s*(\\d{4})\\b`, 'i'), (m) => valid(+m[1], monthNum(m[2]), +m[3])],
-    // May 12 1998, May 12th, 1998
-    [new RegExp(`\\b${MONTH_WORD}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s*(\\d{4})\\b`, 'i'), (m) => valid(+m[2], monthNum(m[1]), +m[3])],
-  ];
-  for (const [re, fn] of tries) {
-    const m = s.match(re);
-    if (!m) continue;
-    const d = fn(m);
-    if (d) return { ...d, start: m.index, end: m.index + m[0].length, text: m[0] };
-  }
-  return null;
+  const d = findDates(text).find((x) => x.year && !x.impossible);
+  return d ? { day: d.day, month: d.month, year: d.year, start: d.start, end: d.end, text: d.text, ambiguous: d.ambiguous, alt: d.alt } : null;
 }
 
+const BIRTH_WORD = /\b(dob|d\.o\.b|born|birth ?day|birth ?date|date of birth|paida|paidaish|janam|janamdin|tareekh|tarikh)\b|پیدائش|تاریخ|जन्म|ميلاد/i;
 const PARENT_RE = /\b(mother|mom|mum|mama|ammi|ammi jaan|maa|mother'?s name|mom'?s name|father|dad|papa|abbu|abba|baba|father'?s name|dad'?s name)\b\s*(?:name\s*)?(?:is|:|-|=)?\s*/gi;
 const Q_WORDS = /^(will|would|can|could|should|shall|is|are|am|do|does|did|when|what|whats|what's|where|who|why|how|which|kya|kab|kaise|kaisi|kese|kyun|kyon|kon|kaun|kitna|kahan|meri|mera)\b/i;
 const FILLER = /\b(my|name|is|naam|hai|mera|meri|i am|i'm|im|this is|it'?s|hello|hi|hey|salam|salaam|assalam o alaikum|aoa|mira|please|pls|plz|dob|d\.o\.b|date of birth|birth ?date|birthday|born|on|date|reading|prediction|for me|me|and|my name is)\b/gi;
@@ -57,10 +35,30 @@ function nameWords(chunk, max = 3) {
  * Parses a reading request from a public comment. Returns null unless it has a full birth date.
  * { name, nameFromProfile, dob: 'YYYY-MM-DD', date: {day,month,year}, dateText, mother, father, question }
  */
-export function parseReadingComment(comment, displayName = '') {
+export function parseReadingComment(comment, displayName = '', { allowNoYear = false, askAmbiguous = false } = {}) {
   const text = String(comment || '').replace(/\s+/g, ' ').trim();
-  const date = findBirthDate(text);
-  if (!date) return null;
+  const all = findDates(text);
+  let date = all.find((x) => x.year && !x.impossible) || null;
+  let check = null;   // Mira should ask before reading: { reason: 'impossible' | 'ambiguous', options }
+  if (!date) {
+    const d = all[0];
+    if (!d) return null;
+    // a date without a year: a birthday + Personal Year reading (numbers without separators need a birth word or a short comment)
+    if (!d.impossible && allowNoYear && (d.monthWord || BIRTH_WORD.test(text) || text.split(' ').length <= 4)) date = d;
+    else if (d.impossible) { date = d; check = { reason: 'impossible', options: [] }; }
+    else return null;
+  }
+  if (!check && date.ambiguous && askAmbiguous) check = { reason: 'ambiguous', options: [pickD(date), date.alt] };
+  return { ...partsAround(text, date, displayName), date: pickD(date), dateText: date.text, ...(date.year ? {} : { partial: true }), ...(check ? { check } : {}),
+    dob: date.year ? isoDob(date) : null, ambiguous: !!date.ambiguous, alt: date.alt || null };
+}
+
+const pickD = (d) => ({ day: d.day, month: d.month, year: d.year ?? null });
+const pad = (n) => String(n).padStart(2, '0');
+export const isoDob = (d) => `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+
+/** Name, parents and question around the date (the name may come before or after it). */
+function partsAround(text, date, displayName) {
   const before = text.slice(0, date.start), after = text.slice(date.end);
   // parents: "mother Sara father Ali", "ammi Nadia, abbu Imran", "mom's name is Hina"
   let mother = '', father = '';
@@ -92,18 +90,26 @@ export function parseReadingComment(comment, displayName = '') {
   question = question.slice(0, 140);
   // name: words before the date, else right after it (before the question / parents)
   let name = nameWords(beforeName.replace(question, ''));
-  if (!name) name = nameWords(afterNoParents.split(/\?|\b(?:will|would|can|should|when|what|how|why|kya|kab|kaise|question)\b/i)[0]);
+  if (!name) name = nameWords((question ? afterNoParents.replace(question, ' ') : afterNoParents).split(/\?|\b(?:will|would|can|should|when|what|how|why|kya|kab|kaise|question)\b/i)[0]);
   const nameFromProfile = !name;
   if (!name) name = spokenName(displayName);
-  const pad = (n) => String(n).padStart(2, '0');
-  return { name, nameFromProfile, dob: `${date.year}-${pad(date.month)}-${pad(date.day)}`, date: { day: date.day, month: date.month, year: date.year }, dateText: date.text, mother, father, question };
+  return { name, nameFromProfile, mother, father, question };
+}
+
+/** A reading for a date someone confirmed later (answer to Mira's question, or the AI parser): same shape as parseReadingComment. */
+export function parsedWithDate(comment, displayName, d, name = '') {
+  const text = String(comment || '').replace(/\s+/g, ' ').trim();
+  const p = partsAround(text, { start: text.length, end: text.length }, displayName);
+  if (name) { p.name = name; p.nameFromProfile = false; }
+  const date = pickD(d);
+  return { ...p, date, dateText: showDate(date), dob: date.year ? isoDob(date) : null, ...(date.year ? {} : { partial: true }), ambiguous: false, alt: null };
 }
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const ord = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 /** "12 May 1998" for captions, "the 12th of May, 1998" for speech */
-export const showDate = (d) => `${d.day} ${MONTH_NAMES[d.month - 1]} ${d.year}`;
-export const sayDate = (d) => `the ${ord(d.day)} of ${MONTH_NAMES[d.month - 1]}, ${d.year}`;
+export const showDate = (d) => `${d.day} ${MONTH_NAMES[d.month - 1]}${d.year ? ' ' + d.year : ''}`;
+export const sayDate = (d) => `the ${ord(d.day)} of ${MONTH_NAMES[d.month - 1]}${d.year ? ', ' + d.year : ''}`;
 
 const fill = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] ?? ''));
 
@@ -138,3 +144,27 @@ export function readingScript(reading, parsed, level = 1, variety = null) {
   ];
   return { name: parsed.name, title: NUMBER_TITLES[n.lifePath], keyNumbers, sentences: [lead, ...s], spoken: `${lead} ${s.join(' ')}` };
 }
+
+/**
+ * No birth year: a shorter reading from what the day and month give - Birthday number, Personal Year 2026, the
+ * answer to their question - and an invitation to give the year next time for the Life Path. Same shape as readingScript.
+ */
+export function partialScript(parsed, variety = null) {
+  const { day, month } = parsed.date, who = `${parsed.name}|${day}-${month}`;
+  const pick = (cat, list) => (variety ? variety.choose(cat, list, who, `${day}-${month}`) : choose(cat, list, who));
+  const red = (n, keep = true) => { n = Math.abs(n); while (n > 9 && !(keep && [11, 22, 33].includes(n))) n = String(n).split('').reduce((a, b) => a + +b, 0); return n; };
+  const birthday = red(day), py = red(red(month, false) + red(day, false) + red(2026, false), false);
+  const first = String(parsed.name).split(' ')[0];
+  const s = [
+    fill(pick('bd-frame', BIRTHDAY_T), { n: birthday, m: pick('lp-' + birthday, LP_SHORT[birthday] || LP_SHORT[red(birthday, false)]) }),
+    fill(pick('py-frame', READING_T.year), { n: py, m: pick('py-' + py, PY_SHORT[py]) }),
+  ];
+  const topic = classifyQuestion(parsed.question);
+  if (topic) s.push(fill(pick('question', READING_T.question), { q: /[?]$/.test(parsed.question) ? parsed.question : parsed.question + '?', g: QUESTION_GUIDANCE[py][topic] }));
+  s.push(fill(pick('no-year', NO_YEAR_T), { first }));
+  const lead = fill(pick('lead', READING_T.lead), { name: parsed.name, date: showDate(parsed.date) });
+  return { name: parsed.name, title: NUMBER_TITLES[birthday], keyNumbers: [{ label: 'Birthday', value: birthday }, { label: 'Year 2026', value: py }],
+    sentences: [lead, ...s], spoken: `${lead} ${s.join(' ')}` };
+}
+const BIRTHDAY_T = ['Your Birthday number is {n}, so you are {m}', 'Born on that day, your Birthday number is {n}: you are {m}', 'The day you were born gives you the number {n}. You are {m}'];
+const NO_YEAR_T = ['Tell me your birth year next time, {first}, and I will reveal your Life Path too.', 'Add your birth year, {first}, and the crystal ball will show your Life Path.', 'With your birth year I can read your Life Path as well, {first}.'];

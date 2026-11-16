@@ -2,6 +2,7 @@
 // For entertainment only.
 import { reduce } from './numerology.js';
 import { NUMBER_TITLES, MEANINGS, PERSONAL_YEAR } from './meanings.js';
+import { findDates } from './dates.js';
 
 // ---------------------------------------------------------------- filters
 const PROFANITY = [
@@ -34,22 +35,10 @@ export function filterComment(text) {
 export const isSelfHarm = (t) => SELF_HARM_RE.test(t);
 
 // ---------------------------------------------------------------- date parsing (public chat: day + month, optionally year)
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+// the forgiving reader in dates.js: typos, ordinals, words, 2-digit years, no separators, Urdu / Arabic / Hindi digits
 export function extractBirthDate(text) {
-  const t = String(text || '').toLowerCase();
-  let m;
-  const mon = (w) => { const i = MONTHS.indexOf(w.slice(0, 3)); return i >= 0 ? i + 1 : null; };
-  if ((m = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?([a-z]{3,9})\.?,?\s*(\d{4})?\b/)) && mon(m[2])) return valid(+m[1], mon(m[2]), m[3] && +m[3]);
-  if ((m = t.match(/\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?\b/)) && mon(m[1])) return valid(+m[2], mon(m[1]), m[3] && +m[3]);
-  if ((m = t.match(/\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{4}))?\b/))) return valid(+m[1], +m[2], m[3] && +m[3]);
-  return null;
-  function valid(day, month, year) {
-    if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) return null;
-    const dim = new Date(Date.UTC(year || 2000, month, 0)).getUTCDate();
-    if (day > dim) return null;
-    if (year && (year < 1900 || year > 2026)) year = null;
-    return { day, month, year: year || null };
-  }
+  const d = findDates(text).find((x) => !x.impossible);
+  return d ? { day: d.day, month: d.month, year: d.year || null } : null;
 }
 
 export function quickNumbers({ day, month, year }, currentYear = 2026) {
@@ -232,7 +221,7 @@ export function classifyIntent(text) {
 }
 
 export function spokenName(nickname) {
-  const n = String(nickname || 'friend').replace(/[_.\-]+/g, ' ').replace(/\d+/g, ' ').replace(/[^\p{L}\p{N} ']/gu, '').replace(/\s+/g, ' ').trim();
+  const n = String(nickname || 'friend').replace(/[_.\-]+/g, ' ').replace(/\d+/g, ' ').replace(/[^\p{L}\p{M}\p{N} ']/gu, '').replace(/\s+/g, ' ').trim();
   return (n || 'friend').slice(0, 24).replace(/(^|\s)(\p{Ll})/gu, (m, a, b) => a + b.toUpperCase());
 }
 
@@ -304,12 +293,15 @@ export function welcomeNames(names, max = 3) {
 
 const Q_START = /^(what|whats|what's|when|where|who|whom|why|how|which|will|would|can|could|should|shall|is|are|was|were|do|does|did|am|have|has|kya|kab|kaise|kaisi|kese|kyun|kyon|kyu|kon|kaun|kitna|kitne|kitni|kahan|kidhar)\b/i;
 /** Does the comment ask something? ("will I get married?", "kya meri shaadi hogi", "what is my lucky number") */
-export function isQuestion(text) { const t = normalizeComment(text); return /\?\s*$/.test(t) || Q_START.test(t); }
+// other scripts: Urdu / Arabic question mark, Urdu / Hindi / Arabic question words
+const Q_OTHER = /^(کیا|کب|کیسے|کیوں|کون|کہاں|کتنا|کتنی|क्या|कब|कैसे|क्यों|कौन|कहाँ|कितना|هل|ماذا|متى|كيف|لماذا|أين|من)(\s|$)/u;
+export function isQuestion(text) { const t = normalizeComment(text); return /[?؟]\s*$/.test(t) || Q_START.test(t) || Q_OTHER.test(t); }
 
 /** Spoken reply that first repeats who asked what: "Ali asks, will I get married? Love follows its own calendar..." */
 export function withQuestion(nickname, comment, answer, maxWords = 14) {
   const name = spokenName(nickname), q = normalizeComment(comment);
   if (!isQuestion(q) || q.split(' ').length > maxWords) return answer;
+  if (/[^\u0000-\u024F\s\p{P}\p{N}\p{Extended_Pictographic}]/u.test(q)) return answer;   // Urdu / Hindi / Arabic ... script: her answer alone (it starts with the name)
   let a = String(answer || '').trim();
   const lead = new RegExp('^(?:oh |ah |ooh |hmm,? )?' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[,!.]?\\s+', 'i');
   if (lead.test(a)) { a = a.replace(lead, ''); a = a.charAt(0).toUpperCase() + a.slice(1); }
@@ -328,45 +320,73 @@ export function joinNames(names) {
 // ---------------------------------------------------------------- LLM (OpenAI-compatible: OpenAI, xAI, OpenRouter, Groq, local)
 const PERSONA_BASE = `You are Mystic Mira, a warm, playful, slightly mysterious anime fortune-teller hosting a TikTok LIVE. You sit at a candle-lit table with a crystal ball and a quill.
 Rules:
-- Reply in 1 to 2 short sentences, at most 30 words, spoken aloud, so no emojis, lists, hashtags or links.
-- Address the viewer by their name once.
+- Reply in 1 to 3 short sentences, at most 40 words, spoken aloud, so no emojis, lists, hashtags, markdown or links.
+- Start your reply with the viewer's name.
+- Really answer what they asked or said: facts, advice, jokes, love, life, small talk. Keep your mystic fortune-teller flavour light (the stars, the crystal ball), but be correct and helpful first.
+- You are having a conversation: use what you already know about this viewer (given below) and continue the thread naturally. Now and then (not every time) end with one short, natural follow-up question, for example "love or career?", or ask for their birth date if you do not know it.
 - Everything is for entertainment. Never state predictions as facts; use playful, hedged wording ("the stars hint", "just for fun").
 {{READINGS_RULE}}
 - If a viewer shares their birth day and month (and maybe year), you may mention their Personal Year 2026 or Life Path numbers using Pythagorean numerology: Personal Year = reduce(month + day + 2026 reduced to 1), Life Path = reduce(reduced month + reduced day + reduced year) keeping 11, 22, 33.
-- Health, legal or money questions: be kind and gentle, no medical, legal or financial advice; suggest a professional.
+- Health, legal or money questions: be kind and gentle, no medical, legal or financial advice or guarantees; suggest a professional.
+- Keep it TikTok-safe and family-friendly.
 - Politely refuse hateful, sexual, violent or harmful requests in one sentence and change the subject to the stars.
 - If someone seems in danger or talks about self-harm, gently encourage them to reach out to someone they trust or a local helpline.
-- Reply in the same language and script the viewer used (English, Urdu, Roman Urdu, Hindi, Arabic and so on).
+- Reply in the same language and script the viewer used: Urdu in Urdu script, Roman Urdu in Roman Urdu, Hindi in Devanagari or romanized as they wrote, Arabic, Spanish and so on; English if unsure.
 - Never mention that you are an AI model or name any company.`;
 const FORM_RULE = "- Never ask for private details (full name, parents' names, full date of birth, phone, address) in the public chat. For a full reading, tell them to use the private form in the bio link, get a code, send a Rose and comment the code.";
 const LIVE_RULE = '- For a full prediction, tell them to comment their name and birth date (for example Sara 12 May 1998), and optionally a question; their mother and father names are optional. Never ask for phone numbers or addresses.';
 export const PERSONA = PERSONA_BASE.replace('{{READINGS_RULE}}', FORM_RULE);
 export const LIVE_PERSONA = PERSONA_BASE.replace('{{READINGS_RULE}}', LIVE_RULE);
 
-export async function llmReply(cfg, { nickname, comment, context = '', liveReadings = false }, fetchImpl = fetch) {
+/** Error with the HTTP status and the provider's Retry-After (seconds), for rate limits (402 / 429). */
+export class LlmError extends Error { constructor(msg, status = 0, retryAfter = 0) { super(msg); this.status = status; this.retryAfter = retryAfter; } }
+
+/**
+ * OpenAI-compatible chat completion. cfg: { baseUrl, model, apiKey | noKey, temperature, maxTokens (0 = provider default),
+ * timeoutMs, reasoningEffort, extraPersona }. history: earlier turns with this viewer [{ role: 'user'|'assistant', content }].
+ * Keyless providers (cfg.noKey, e.g. Pollinations): no Authorization header at all.
+ */
+export async function llmReply(cfg, { nickname, comment, context = '', liveReadings = false, history = [] }, fetchImpl = fetch) {
   const persona = liveReadings ? LIVE_PERSONA : PERSONA;
+  const text = cleanSpoken(await llmComplete(cfg, [
+    { role: 'system', content: (cfg.extraPersona ? persona + '\n' + cfg.extraPersona : persona) },
+    ...history.slice(-12).map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.content).slice(0, 300) })),
+    { role: 'user', content: `${context}Viewer name: ${spokenName(nickname)}\nTheir comment: "${normalizeComment(comment).slice(0, 200)}"\n${scriptHint(comment)}Reply as Mira.` },
+  ], fetchImpl));
+  if (!text) throw new LlmError('empty reply');
+  return text;
+}
+
+/** The comment is in a non-Latin script: say which, so the whole answer comes back in it (models drift to English). */
+export function scriptHint(t) {
+  t = String(t || '');
+  const l = /[\u0600-\u06FF]/.test(t) ? (/[پچژگکیۓےٹڈڑں]/.test(t) ? 'Urdu, written in Urdu script' : 'Arabic, written in Arabic script')
+    : /[\u0900-\u097F]/.test(t) ? 'Hindi, written in Devanagari' : /[\u0980-\u09FF]/.test(t) ? 'Bengali script' : /[\u0400-\u04FF]/.test(t) ? 'Russian (Cyrillic)' : '';
+  return l ? `Answer entirely in ${l} (every sentence, not English); their name may stay as it is.\n` : '';
+}
+
+/** One OpenAI-compatible chat completion; returns the raw message text. Throws LlmError (timeout, HTTP status + Retry-After). */
+export async function llmComplete(cfg, messages, fetchImpl = fetch, extra = {}) {
   const base = String(cfg.baseUrl || '').replace(/\/+$/, '');
-  if (!base || !cfg.apiKey || !cfg.model) throw new Error('LLM not configured');
+  if (!base || !cfg.model || (!cfg.apiKey && !cfg.noKey)) throw new LlmError('LLM not configured');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs || 8000);
+  const headers = { 'content-type': 'application/json' };
+  if (cfg.apiKey && !cfg.noKey) headers.authorization = `Bearer ${cfg.apiKey}`;
+  const body = { model: cfg.model, temperature: cfg.temperature ?? 0.9, messages, ...extra };
+  if (cfg.maxTokens) body.max_tokens = cfg.maxTokens;
+  if (cfg.reasoningEffort) body.reasoning_effort = cfg.reasoningEffort;
   try {
-    const r = await fetchImpl(`${base}/chat/completions`, {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model, temperature: cfg.temperature ?? 0.9, max_tokens: cfg.maxTokens || 120,
-        messages: [
-          { role: 'system', content: (cfg.extraPersona ? persona + '\n' + cfg.extraPersona : persona) },
-          { role: 'user', content: `${context}Viewer name: ${spokenName(nickname)}\nTheir comment: "${normalizeComment(comment).slice(0, 200)}"\nReply as Mira.` },
-        ],
-      }),
-    });
-    if (!r.ok) throw new Error(`LLM HTTP ${r.status}`);
+    let r;
+    try { r = await fetchImpl(`${base}/chat/completions`, { method: 'POST', signal: ctrl.signal, headers, body: JSON.stringify(body) }); }
+    catch (e) { throw new LlmError(ctrl.signal.aborted ? 'LLM timeout' : `LLM network error: ${e.message}`); }
+    if (!r.ok) {
+      let ra = Number(r.headers?.get?.('retry-after')) || 0;
+      if (!ra && (r.status === 402 || r.status === 429)) { try { const m = String(await r.text()).match(/retry after (\d+)\s*s/i); if (m) ra = Number(m[1]); } catch {} }
+      throw new LlmError(`LLM HTTP ${r.status}`, r.status, ra);
+    }
     const d = await r.json();
-    let text = d?.choices?.[0]?.message?.content || '';
-    text = cleanSpoken(text);
-    if (!text) throw new Error('empty reply');
-    return text;
+    return String(d?.choices?.[0]?.message?.content || '');
   } finally { clearTimeout(timer); }
 }
 
@@ -378,7 +398,7 @@ export function cleanSpoken(text, maxWords = 60) {
   const words = t.split(' ');
   if (words.length > maxWords) {
     t = words.slice(0, maxWords).join(' ');
-    const cut = Math.max(t.lastIndexOf('.'), t.lastIndexOf('!'), t.lastIndexOf('?'));
+    const cut = Math.max(...['.', '!', '?', '؟', '۔', '।'].map((c) => t.lastIndexOf(c)));
     t = cut > 20 ? t.slice(0, cut + 1) : t + '…';
   }
   return t;

@@ -27,7 +27,7 @@ export class TTS {
     const c = this.getConfig();
     if (URDU_SCRIPT.test(text) && c.urduVoice) return c.urduVoice;
     if (HINDI_SCRIPT.test(text) && c.hindiVoice) return c.hindiVoice;
-    return c.voice || 'en-US-AvaNeural';
+    return c.voice || 'en-US-AvaMultilingualNeural';
   }
 
   /** Returns { id, url, duration, voice } or null when TTS is off/unavailable. */
@@ -71,6 +71,8 @@ export class TTS {
 }
 
 export const VOICE_CHOICES = [
+  // multilingual: the same voice speaks the viewer's language (Urdu, Hindi, Arabic, Spanish ...) - Mira's default
+  'en-US-AvaMultilingualNeural', 'en-US-EmmaMultilingualNeural',
   'en-US-AvaNeural', 'en-US-EmmaNeural', 'en-US-JennyNeural', 'en-US-AriaNeural', 'en-US-MichelleNeural',
   'en-GB-SoniaNeural', 'en-AU-NatashaNeural', 'en-IN-NeerjaNeural', 'en-IN-NeerjaExpressiveNeural',
   'ur-PK-UzmaNeural', 'ur-IN-GulNeural', 'hi-IN-SwaraNeural', 'ar-AE-FatimaNeural',

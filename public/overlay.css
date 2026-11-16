@@ -234,3 +234,6 @@ section, aside { transition: opacity .5s, transform .5s; }
 .phone #card .face { backface-visibility:visible; transform:none; }
 .phone #card:not(.flip) .front, .phone #card.flip .back { display:none; }
 .phone #title, .phone #cardNum, .phone #card .sigil { text-shadow: 0 2px 0 #5a2d00, 0 0 3px #000; }
+
+/* any language: Urdu / Arabic lines read right-to-left, Hindi and others as written (direction follows the text) */
+#readingText, .cbText, .toast { unicode-bidi: plaintext; }

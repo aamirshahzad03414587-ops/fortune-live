@@ -3,8 +3,10 @@
 // Events: 'reveal' (reading), 'say' (reply/greet/prompt), 'queue', 'chatQueue', 'toast', 'gift', 'like', 'follow', 'idle', 'skip'
 import { EventEmitter } from 'node:events';
 import { computeReading, liveReading } from './numerology.js';
-import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName } from './chat.js';
-import { parseReadingComment, readingScript, showDate } from './comment-reading.js';
+import { AiGate, Memory, llmReady, ENGAGE_T, ENGAGE_DOB_T } from './ai.js';
+import { ReplyEngine, filterComment, llmReply, llmComplete, detectLanguage, cleanSpoken, normalizeComment, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName, extractBirthDate } from './chat.js';
+import { parseReadingComment, readingScript, showDate, partialScript, parsedWithDate } from './comment-reading.js';
+import { looksLikeDateAttempt, resolveDateAnswer, readAiDate, AI_DATE_PROMPT, MONTH_NAMES, ord } from './dates.js';
 import { Variety, WELCOME_T, WELCOME_ONE_T, HOWTO_T, HOWTO_SHORT_T, EXAMPLE_DATES, IDLE_T } from './variety.js';
 
 export const CODE_RE = /(?:^|[^A-Z0-9])#?([A-HJ-NP-Z]\d{2,4})(?![0-9])/gi;
@@ -15,23 +17,29 @@ export function extractCodes(comment) {
 }
 
 const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 1,
-  idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 35,
+  idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 45,
+  // conversations: a viewer answering Mira's question (within followUpSeconds) skips the cooldown and continues the
+  // thread; nobody gets more than maxConsecutiveTurns replies in a row while others wait; when quiet, Mira sometimes
+  // (engageChance) turns to an active chatter by name with a question.
+  followUpSeconds: 180, maxConsecutiveTurns: 2, engageChance: 0.4,
   // viewers joining the LIVE: everyone is welcomed BY NAME with a short "how to get a reading". Batched ("Welcome Sara,
   // Ali and Zoya!"), at most joinMaxNames names per welcome (the rest wait for the next one, nobody is dropped), at most
   // one welcome every joinGreetSeconds. Readings go first, but while readings are queued a welcome slips in between them.
   welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 6, readQuestionAloud: true };
 // Readings straight from TikTok comments ("Sara 12/05/1998 will I travel?"). No form, no codes.
 // requireGift=false: everyone who comments a birth date gets one; gifters jump ahead (bigger gift = higher tier).
-export const READINGS_DEFAULTS = { fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
+// yearOptional: day + month alone still gets a (Birthday + Personal Year) reading. askAmbiguous: for 05/12/1998 ask
+// "5 December or 12 May?" instead of reading it day-first. aiDates: messy dates the rules can't read go to the AI.
+export const READINGS_DEFAULTS = { yearOptional: true, askAmbiguous: false, aiDates: true, fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
   freeTierName: 'Live prediction', freeSeconds: 18, howToEverySeconds: 75, privateForm: false };
 const VOICE_DEFAULTS = { readingSpeechStart: 3, talkSpeechStart: 0.5, tailSeconds: 1.2 };
 
 export const estimateSpeechSeconds = (text) => Math.max(1.5, String(text).split(/\s+/).length / 2.6);
 
 export class LiveEngine extends EventEmitter {
-  constructor({ config, store, tts = null, replies = new ReplyEngine(), llm = llmReply, now = () => Date.now(), estimate = estimateSpeechSeconds }) {
+  constructor({ config, store, tts = null, replies = new ReplyEngine(), llm = llmReply, complete = llmComplete, now = () => Date.now(), estimate = estimateSpeechSeconds }) {
     super();
-    Object.assign(this, { config, store, tts, replies, llm, now, estimate });
+    Object.assign(this, { config, store, tts, replies, llm, complete, now, estimate });
     this.newStream();
   }
 
@@ -48,6 +56,8 @@ export class LiveEngine extends EventEmitter {
     this.gifters = new Set(); this.lastReplyAt = new Map(); this.lastGreetAt = new Map();
     this.pendingGiftGreets = []; this.pendingFollowGreets = []; this.lastGreetTime = 0;
     this.pendingJoins = []; this.welcomed = new Set(); this.lastWelcomeTime = -1e12;
+    this.ai = this.ai || new AiGate({ now: () => this.now() });
+    this.memory = new Memory({ now: () => this.now() }); this.dateChecks = new Map(); this.dateAsks = new Map(); this.lastReplyUser = null; this.replyStreak = 0;   // per-stream: cleared here
     this.prepared = new Map(); // chat id -> Promise<{ text, source, sp }> (reply + voice made while she is still talking)
     // wording variety for this stream (readings, welcomes, idle lines)
     this.variety = new Variety(`${this.now()}-${Math.random().toString(36).slice(2, 8)}`); this.lastJobKind = null;
@@ -104,8 +114,20 @@ export class LiveEngine extends EventEmitter {
     this.replies.liveReadings = !!R.fromComments;
     if (R.fromComments) {
       const bad = filterComment(c.comment);
-      const parsed = ['link', 'profanity', 'spam-repeat'].includes(bad) ? null : parseReadingComment(c.comment, c.nickname);
-      if (parsed) return this.enqueueCommentReading(c, parsed);
+      if (!['link', 'profanity', 'spam-repeat'].includes(bad)) {
+        // she asked this viewer about their date ("5 December or 12 May?"): this comment is the answer
+        const chk = this.dateChecks.get(c.userId);
+        if (chk && this.now() - chk.at < this.chatCfg.followUpSeconds * 1000) {
+          const d = resolveDateAnswer(c.comment, chk.options, chk.parsed?.date);
+          if (d) { this.dateChecks.delete(c.userId); return this.readingFor(chk.c, parsedWithDate(chk.c.comment, chk.c.nickname, d, chk.parsed && !chk.parsed.nameFromProfile ? chk.parsed.name : chk.name || '')); }
+          if (++chk.tries >= 2) this.dateChecks.delete(c.userId);
+        }
+        const parsed = parseReadingComment(c.comment, c.nickname, { allowNoYear: R.yearOptional, askAmbiguous: R.askAmbiguous });
+        if (parsed?.check) return this.askDate(c, parsed);
+        if (parsed) return this.readingFor(c, parsed);
+        // looks like a birth date the rules can't read ("5 dicmbr 98"): the AI reads it, or she asks
+        if (looksLikeDateAttempt(c.comment) && !this.queue.some((q) => q.userId === c.userId) && !this.dateChecks.has(c.userId)) return this.guessDate(c);
+      }
     }
     if (R.privateForm) for (const code of extractCodes(c.comment)) {
       if (!this.store.byCode(code)) continue;
@@ -178,9 +200,14 @@ export class LiveEngine extends EventEmitter {
     if (C.mode === 'gifters' && !isGifter) return { ok: false, reason: 'not-gifter' };
     if (C.mode === 'followers' && !isFollower) return { ok: false, reason: 'not-follower' };
     if (C.mode === 'followersOrGifters' && !isFollower && !isGifter) return { ok: false, reason: 'not-follower-or-gifter' };
+    // her question to this viewer is still open: this comment is their answer (no cooldown, it continues the thread)
+    const followUp = this.memory.awaiting(c.userId, C.followUpSeconds);
     const last = this.lastReplyAt.get(c.userId) || 0;
-    if (this.now() - last < C.userCooldownSeconds * 1000) return { ok: false, reason: 'cooldown' };
+    if (!followUp && this.now() - last < C.userCooldownSeconds * 1000) return { ok: false, reason: 'cooldown' };
     if (this.chatQueue.some((q) => q.userId === c.userId)) return { ok: false, reason: 'already-queued' };
+    const norm = normalizeComment(c.comment).toLowerCase();
+    if (norm.length > 3 && this.chatQueue.some((q) => this.now() - q.at <= C.maxCommentAgeSeconds * 1000 && normalizeComment(q.comment).toLowerCase() === norm)) return { ok: false, reason: 'duplicate' };   // copy-paste spam
+    this.memory.learn(c.userId, c.nickname, c.comment);
     const question = isQuestion(c.comment);
     if (this.chatQueue.length >= C.maxQueue && question) {
       // a question gets in by pushing out the oldest plain comment ("hi", "nice")
@@ -188,8 +215,9 @@ export class LiveEngine extends EventEmitter {
       if (drop >= 0) this.chatQueue.splice(drop, 1);
     }
     if (this.chatQueue.length >= C.maxQueue) return { ok: false, reason: 'chat-queue-full' };
-    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).trim().slice(0, 200), at: this.now(), isGifter, isFollower, question };
-    this.chatQueue.push(item);
+    const item = { id: `c${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).trim().slice(0, 200), at: this.now(), isGifter, isFollower, question, followUp };
+    if (followUp) { const i = this.chatQueue.findIndex((q) => !q.followUp); this.chatQueue.splice(i < 0 ? this.chatQueue.length : i, 0, item); }   // answers to her questions first
+    else this.chatQueue.push(item);
     this.lastReplyAt.set(c.userId, this.now()); // cooldown counts from when we accepted the comment
     this.emit('chatQueue', this.chatQueue);
     this.pump();
@@ -237,6 +265,46 @@ export class LiveEngine extends EventEmitter {
   }
 
   // ------------------------------------------------------------------ readings from comments
+  readingFor(c, parsed) {
+    const m = this.memory.learn(c.userId, c.nickname, c.comment);
+    m.facts.reading = true;
+    if (parsed.date) this.memory.setDob(c.userId, parsed.date);
+    return this.enqueueCommentReading(c, parsed);
+  }
+
+  /** A messy date the rules could not read: ask the AI (when its slot is free), otherwise ask the viewer. */
+  guessDate(c) {
+    const L = this.config.llm || {};
+    if (!(this.readingsCfg.aiDates && llmReady(L) && this.ai.open())) return this.askDate(c, null);
+    this.ai.ask(L, { comment: c.comment, name: '', cacheable: false }, () => this.complete({ ...L, temperature: 0 }, [{ role: 'system', content: AI_DATE_PROMPT }, { role: 'user', content: String(c.comment).slice(0, 200) }]))
+      .then((r) => {
+        const g = readAiDate(r.text);
+        if (g && g.clear && g.day) return this.readingFor(c, parsedWithDate(c.comment, c.nickname, g, g.name));
+        this.askDate(c, g?.options?.length >= 2 ? { check: { reason: 'ambiguous', options: g.options }, name: g.name || '', nameFromProfile: !g.name } : null);
+      })
+      .catch((e) => { this.emit('log', `AI date reader not used (${e.message})`); this.askDate(c, null); });
+    return { ok: true, pending: 'date-ai' };
+  }
+
+  /** Mira asks about the date ("Sara, is that 5 December or 12 May?"); the viewer's next comment completes the reading. */
+  askDate(c, parsed) {
+    const asked = this.dateAsks.get(c.userId) || 0;
+    if (asked >= 2) return { ok: false, reason: 'date-unclear' };
+    this.dateAsks.set(c.userId, asked + 1);
+    const name = parsed && !parsed.nameFromProfile && parsed.name ? String(parsed.name).split(' ')[0] : spokenName(c.nickname);
+    const opts = (parsed?.check?.options || []).filter(Boolean), ur = detectLanguage(c.comment) !== 'en';
+    let text;
+    if (opts.length >= 2) text = ur ? `${name}, ${showDate(opts[0])} ya ${showDate(opts[1])}?` : `${name}, is that ${showDate(opts[0])} or ${showDate(opts[1])}?`;
+    else if (parsed?.check?.reason === 'impossible') { const d = parsed.date; text = `${name}, ${MONTH_NAMES[d.month - 1]} has no ${ord(d.day)}! Which date did you mean? Write it like 12 May 1998.`; }
+    else text = ur ? `${name}, aap ki date of birth samajh nahi aayi. Aise likhein: 12 May 1998.` : `${name}, I could not quite read your birth date. Write it like 12 May 1998?`;
+    this.dateChecks.set(c.userId, { c, parsed, name: parsed?.name && !parsed.nameFromProfile ? parsed.name : '', options: opts, at: this.now(), tries: 0 });
+    const item = { id: `q${this.now()}${Math.random().toString(36).slice(2, 6)}`, userId: c.userId, nickname: c.nickname, comment: String(c.comment).slice(0, 200), at: this.now(), preset: text, followUp: true, question: false };
+    this.chatQueue = this.chatQueue.filter((q) => q.userId !== c.userId);
+    const i = this.chatQueue.findIndex((q) => !q.followUp); this.chatQueue.splice(i < 0 ? this.chatQueue.length : i, 0, item);
+    this.emit('chatQueue', this.chatQueue); this.prefetch(); this.pump();
+    return { ok: true, asked: text };
+  }
+
   /** c = { userId, nickname, comment }, parsed = parseReadingComment(...) */
   enqueueCommentReading(c, parsed) {
     const R = this.readingsCfg;
@@ -254,15 +322,15 @@ export class LiveEngine extends EventEmitter {
     const tier = paid ? this.tierFor(paid) : null;
     // the queue cap only stops free readings; gifters always get in
     if (!paid && this.queue.length >= R.maxQueue) { this.toast(`The prediction queue is full (${R.maxQueue}). Try again in a few minutes!`, 'warn'); return { ok: false, reason: 'queue-full' }; }
-    let reading;
-    try { reading = computeReading({ fullName: parsed.name, dob: parsed.dob, motherName: parsed.mother, fatherName: parsed.father, question: parsed.question, year: 2026 }); } catch { return { ok: false, reason: 'bad-data' }; }
+    let reading = null;   // no birth year: a Birthday + Personal Year reading (partialScript)
+    if (!parsed.partial) try { reading = computeReading({ fullName: parsed.name, dob: parsed.dob, motherName: parsed.mother, fatherName: parsed.father, question: parsed.question, year: 2026 }); } catch { return { ok: false, reason: 'bad-data' }; }
     const level = tier ? tier.level : 1;
     const item = {
       id: `d${this.now()}${Math.random().toString(36).slice(2, 5)}`, kind: 'reading', source: 'comment', code: parsed.dateText, userId: c.userId, nickname: c.nickname,
       tierName: tier ? tier.name : R.freeTierName, level, seconds: tier ? Math.min(tier.secondsOnScreen, 18 + level * 6) : R.freeSeconds,
       priority: paid && R.giftPriority ? 1 + level : 0, at: this.now(), parsed, reading,
       caption: { icon: '🔮', title: `${parsed.name} · ${showDate(parsed.date)}`, text: parsed.question || [parsed.mother && `Mother: ${parsed.mother}`, parsed.father && `Father: ${parsed.father}`].filter(Boolean).join(' · ') || `@${c.nickname}` },
-      ...readingScript(reading, parsed, level, this.variety),
+      ...(reading ? readingScript(reading, parsed, level, this.variety) : partialScript(parsed, this.variety)),
     };
     if (paid) this.credits.delete(c.userId);
     this.readingsByUser.set(c.userId, done + 1);
@@ -292,7 +360,7 @@ export class LiveEngine extends EventEmitter {
     const tier = this.tierFor(diamonds);
     this.queue.splice(this.queue.indexOf(item), 1);
     Object.assign(item, { tierName: tier.name, level: tier.level, seconds: Math.min(tier.secondsOnScreen, 18 + tier.level * 6), priority: this.readingsCfg.giftPriority ? 1 + tier.level : 0 },
-      readingScript(item.reading, item.parsed, tier.level, this.variety));
+      item.reading ? readingScript(item.reading, item.parsed, tier.level, this.variety) : partialScript(item.parsed, this.variety));
     this.readingVoice.delete(item.id); this.prepareReadingVoice(item);
     this.credits.delete(item.userId);
     this.insertByPriority(item);
@@ -327,12 +395,15 @@ export class LiveEngine extends EventEmitter {
       this.lastHowTo = this.now();
       return { kind: 'say', sub: 'prompt', text: this.replies.howToAsk(), caption: { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } };
     }
-    while (this.chatQueue.length) {
-      const c = this.chatQueue.shift();
-      this.emit('chatQueue', this.chatQueue);
-      if (this.now() - c.at <= C.maxCommentAgeSeconds * 1000) return { kind: 'say', sub: 'reply', chat: c };
-    }
-    return null;
+    // drop stale comments, then take the first one - unless that viewer just had maxConsecutiveTurns replies in a row
+    // and somebody else is waiting (nobody hogs her; the thread continues after the others had a turn)
+    this.chatQueue = this.chatQueue.filter((c) => this.now() - c.at <= C.maxCommentAgeSeconds * 1000);
+    if (!this.chatQueue.length) { this.emit('chatQueue', this.chatQueue); return null; }
+    let i = 0;
+    if (this.replyStreak >= (C.maxConsecutiveTurns || 2)) { const j = this.chatQueue.findIndex((q) => q.userId !== this.lastReplyUser); if (j >= 0) i = j; }
+    const c = this.chatQueue.splice(i, 1)[0];
+    this.emit('chatQueue', this.chatQueue);
+    return { kind: 'say', sub: 'reply', chat: c };
   }
 
   pump() {
@@ -369,9 +440,23 @@ export class LiveEngine extends EventEmitter {
       this.replies.liveReadings = !!this.readingsCfg.fromComments;
       if (this.replies.liveReadings) this.lastHowTo = this.now();
       this.lastJobKind = 'prompt';
+      const eng = this.engageLine();
+      if (eng) return this.run(eng).catch(() => this.finishCurrent());
       this.run({ kind: 'say', sub: 'prompt', text: this.idleLine(), caption: this.replies.liveReadings ? { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } : null }).catch(() => this.finishCurrent());
     }, wait * 1000);
     this.idleTimer.unref?.();
+  }
+
+  /** Sometimes, when it is quiet, she turns to someone who has been chatting and asks them something (a 2-way chat). */
+  engageLine() {
+    const C = this.chatCfg;
+    if (!C.engageChance || Math.random() >= C.engageChance) return null;
+    const m = this.memory.activeChatter(C.followUpSeconds, 300); if (!m) return null;
+    const f = m.facts, dob = !!f.dob;
+    const list = dob ? ENGAGE_DOB_T.concat(ENGAGE_T.filter((t) => !/birth date/.test(t))) : ENGAGE_T;
+    const text = this.variety.choose('engage', list, m.userId, 'stream').replace(/\{name\}/g, m.name).replace(/\{zodiac\}/g, f.zodiac || '').replace(/\{py\}/g, f.personalYear || '');
+    m.engagedAt = this.now(); this.memory.add(m.userId, 'assistant', text);
+    return { kind: 'say', sub: 'engage', text, caption: { icon: '💬', title: '@' + m.name, text: 'Mira asks you' } };
   }
 
   /** Idle line: the streamer's own lines (config chat.idlePrompts) if set, else invites, teasers and numerology facts. */
@@ -383,30 +468,54 @@ export class LiveEngine extends EventEmitter {
     return this.variety.choose('idle', IDLE_T, String(this.idleCount), 'stream');   // no repeats until all were used
   }
 
-  async makeReply(chat) {
+  /**
+   * Her answer to a chat comment. AI (any OpenAI-compatible provider, keyless ones too) with this viewer's memory when the
+   * request gate is open; otherwise, or on any error / timeout / unsafe answer, the built-in replies (never silent).
+   * prefetch: made ahead of time; if the gate is closed now, return null so it is retried when it is really her turn.
+   */
+  async makeReply(chat, { prefetch = false } = {}) {
     const L = this.config.llm || {};
     const C = this.chatCfg;
-    if (isSelfHarm(chat.comment)) return { text: this.replies.reply(chat.comment, chat).text, source: 'rules' };
-    if (L.enabled && L.apiKey && L.baseUrl && L.model) {
+    const rules = () => ({ text: this.replies.reply(chat.comment, chat).text, source: 'rules' });
+    if (chat.preset) return { text: chat.preset, source: 'rules' };
+    if (isSelfHarm(chat.comment)) return rules();
+    // a birth date in a chat comment: the numbers come from code, not the AI
+    if (extractBirthDate(chat.comment)) return rules();
+    // the one AI slot goes to questions and answers to her questions first; plain chat gets it when none are waiting
+    const priority = chat.question || chat.followUp || !this.chatQueue.some((q) => q !== chat && (q.question || q.followUp));
+    if (llmReady(L) && priority) {
+      if (prefetch && !this.ai.open() && !this.ai.cached(chat.comment, L.cacheSeconds ?? 300)) return null;
       try {
-        const ctx = chat.isGifter ? 'This viewer sent a gift tonight.\n' : '';
-        return { text: cleanSpoken(await this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx, liveReadings: !!this.readingsCfg.fromComments }), C.maxReplyWords), source: 'llm' };
-      } catch (e) { this.emit('log', `LLM failed, using built-in replies: ${e.message}`); }
+        const history = this.memory.history(chat.userId);
+        const ctx = this.memory.context(chat.userId) + (chat.isGifter ? 'This viewer sent a gift tonight.\n' : '');
+        const name = spokenName(chat.nickname);
+        const r = await this.ai.ask(L, { comment: chat.comment, name, cacheable: !history.length },
+          () => this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx, history, liveReadings: !!this.readingsCfg.fromComments }));
+        const text = cleanSpoken(r.text, C.maxReplyWords);
+        const bad = filterComment(text);
+        if (bad === 'link' || bad === 'profanity') throw new Error('unsafe answer: ' + bad);
+        return { text, source: 'llm' };
+      } catch (e) { if (prefetch && e.refused) return null; this.emit('log', `AI reply not used (${e.message}), using built-in replies`); }
     }
-    return { text: this.replies.reply(chat.comment, chat).text, source: 'rules' };
+    return rules();
   }
 
   /** Make the next replies (text + voice) in the background so there is no pause between answers. */
   prefetch() {
     const live = new Set(this.chatQueue.map((c) => c.id));
     for (const id of this.prepared.keys()) if (!live.has(id)) this.prepared.delete(id);
-    for (const c of this.chatQueue.slice(0, this.chatCfg.prefetchReplies ?? 2)) if (!this.prepared.has(c.id)) this.prepared.set(c.id, this.prepareReply(c));
+    for (const c of this.chatQueue.slice(0, this.chatCfg.prefetchReplies ?? 2)) if (!this.prepared.has(c.id)) this.prepared.set(c.id, this.prepareReply(c, { prefetch: true }));
   }
 
-  async prepareReply(chat) {
+  async prepareReply(chat, opt = {}) {
     try {
-      let { text, source } = await this.makeReply(chat);
-      if (this.chatCfg.readQuestionAloud) text = withQuestion(chat.nickname, chat.comment, text);
+      const r = await this.makeReply(chat, opt);
+      if (!r) return null;
+      let { text, source } = r;
+      // memory: what they said and what she answered (an answer ending on a question waits for theirs)
+      this.memory.get(chat.userId, chat.nickname);
+      this.memory.add(chat.userId, 'user', chat.comment); this.memory.add(chat.userId, 'assistant', text);
+      if (this.chatCfg.readQuestionAloud && !chat.preset) text = withQuestion(chat.nickname, chat.comment, text);
       return { text, source, sp: await this.speech(text) };
     } catch { return null; }
   }
@@ -449,7 +558,10 @@ export class LiveEngine extends EventEmitter {
     sp.start = V.talkSpeechStart;
     const total = Math.max(V.minSaySeconds ?? 3, sp.start + sp.duration + V.tailSeconds);
     this.current = { id: `s${this.now()}`, kind: 'say', sub: job.sub, text, source, comment: job.chat ? { nickname: job.chat.nickname, text: job.chat.comment } : null, caption: job.caption || null, speech: sp, seconds: Math.round(total * 10) / 10 };
-    if (job.sub === 'reply') this.stats.replies++;
+    if (job.sub === 'reply') {
+      this.stats.replies++; if (source === 'llm') this.stats.aiReplies = (this.stats.aiReplies || 0) + 1;
+      this.replyStreak = this.lastReplyUser === job.chat.userId ? this.replyStreak + 1 : 1; this.lastReplyUser = job.chat.userId;
+    }
     if (job.sub === 'greet') this.lastGreetTime = this.now();
     this.emit('say', this.current);
     this.prefetch();
@@ -471,6 +583,8 @@ export class LiveEngine extends EventEmitter {
   toast(text, kind = 'info') { this.emit('toast', { text, kind }); }
 
   snapshot() {
-    return { queue: this.queue, chatQueue: this.chatQueue, current: this.current, paused: !!this.paused, stats: this.stats };
+    const a = this.ai.stats, ms = a.ms.length ? Math.round(a.ms.reduce((x, y) => x + y, 0) / a.ms.length) : null;
+    return { queue: this.queue, chatQueue: this.chatQueue, current: this.current, paused: !!this.paused, stats: this.stats,
+      ai: { ready: llmReady(this.config.llm), asked: a.asked, ok: a.ok, cached: a.cached, refused: a.refused, failed: a.failed, avgMs: ms, nextSlotSeconds: Math.ceil(this.ai.wait()) } };
   }
 }

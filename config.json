@@ -57,7 +57,7 @@
   },
   "overlay": {
     "title": "Mystic Mira's Fate Reading",
-    "callToAction": "Comment your name + birth date → get your 2026 prediction 🔮",
+    "callToAction": "Comment your name + birth date \u2192 get your 2026 prediction \ud83d\udd2e",
     "characterImage": "/assets/mira2.jpg",
     "showQueue": true,
     "queueVisibleCount": 5,
@@ -106,9 +106,9 @@
   },
   "voice": {
     "enabled": true,
-    "voice": "en-US-AvaNeural",
-    "urduVoice": "ur-PK-UzmaNeural",
-    "hindiVoice": "hi-IN-SwaraNeural",
+    "voice": "en-US-AvaMultilingualNeural",
+    "urduVoice": "",
+    "hindiVoice": "",
     "rate": "+2%",
     "pitch": "+6%",
     "browserLang": "en-US",
@@ -129,7 +129,7 @@
     "greetGifters": true,
     "greetFollowers": true,
     "greetCooldownSeconds": 8,
-    "maxReplyWords": 35,
+    "maxReplyWords": 45,
     "greetDelaySeconds": 4,
     "welcomeJoins": true,
     "joinGreetSeconds": 10,
@@ -140,12 +140,17 @@
   },
   "llm": {
     "enabled": false,
+    "provider": "",
     "baseUrl": "",
     "apiKey": "",
+    "noKey": false,
     "model": "",
     "temperature": 0.9,
     "maxTokens": 120,
     "timeoutMs": 8000,
+    "minIntervalSeconds": 3,
+    "cacheSeconds": 300,
+    "reasoningEffort": "",
     "extraPersona": ""
   }
 }
