@@ -1,0 +1,7 @@
+node_modules/
+data/*.json
+data/*.tmp
+screenshots/
+voice-samples/
+lipsync-demo.mp4
+lipsync-sync-stats.json

@@ -1,0 +1,26 @@
+{
+  "name": "fortune-live",
+  "version": "1.0.0",
+  "description": "TikTok Live numerology fortune-teller overlay (for entertainment)",
+  "main": "src/server.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "simulate": "node src/simulate.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "express": "^5.3.0",
+    "msedge-tts": "^2.1.1",
+    "tiktok-live-connector": "^2.5.0",
+    "ws": "^8.23.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

@@ -1,0 +1,13 @@
+# Optional: one-click deploy on Render (free web service).
+services:
+  - type: web
+    name: fortune-live
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: TIKTOK_USERNAME
+        sync: false

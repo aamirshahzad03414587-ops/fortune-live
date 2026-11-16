@@ -1,0 +1,177 @@
+import express from 'express';
+import http from 'node:http';
+import path from 'node:path';
+import fs from 'node:fs';
+import { WebSocketServer } from 'ws';
+import { loadConfig, saveConfig, ROOT } from './config.js';
+import { Store } from './store.js';
+import { LiveEngine } from './live.js';
+import { TikTokBridge } from './tiktok.js';
+import { computeReading, parseDate } from './numerology.js';
+import { TTS, VOICE_CHOICES } from './tts.js';
+import { llmReply } from './chat.js';
+
+let config = loadConfig();
+const store = new Store(process.env.DATA_FILE || path.join(ROOT, 'data', 'submissions.json'));
+const tts = new TTS(() => config.voice);
+const live = new LiveEngine({ config, store, tts });
+live.on('log', (m) => console.log('[mira]', m));
+const tiktok = new TikTokBridge(live);
+tiktok.signApiKey = process.env.SIGN_API_KEY || config.tiktok.signApiKey || '';
+setInterval(() => { const n = store.purgeExpired(); if (n) console.log(`[data] auto-deleted ${n} expired submission(s)`); }, 5 * 60e3).unref();
+
+const app = express();
+app.set('trust proxy', true);
+app.use(express.json({ limit: '20kb' }));
+
+// ---------- access control for the streamer-only pages ----------
+const isLocal = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) && !req.headers['x-forwarded-for'];
+function keyOk(req) {
+  if (config.adminKey) return (req.query.key || req.headers['x-admin-key']) === config.adminKey;
+  return isLocal(req); // no key set => only this computer may open admin/overlay
+}
+function requireKey(req, res, next) {
+  if (keyOk(req)) return next();
+  res.status(401).send('Admin key required. Add ?key=YOUR_ADMIN_KEY to the URL (set "adminKey" in config.json).');
+}
+
+// ---------- public pages ----------
+const pub = path.join(ROOT, 'public');
+app.get('/', (req, res) => res.sendFile(path.join(pub, 'form.html')));
+app.get('/r/:token', (req, res) => res.sendFile(path.join(pub, 'report.html')));
+app.get('/overlay', requireKey, (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
+app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
+app.get('/tts/:id.mp3', (req, res) => {
+  const buf = tts.get(req.params.id);
+  if (!buf) return res.status(404).end();
+  res.set({ 'content-type': 'audio/mpeg', 'cache-control': 'no-store', 'content-length': buf.length });
+  res.end(buf);
+});
+app.use('/assets', express.static(path.join(pub, 'assets'), { maxAge: 0, etag: true }));
+app.use(express.static(pub, { index: false }));
+
+app.get('/api/public-config', (req, res) => res.json({
+  trigger: config.trigger, tiers: config.tiers.map(({ name, minDiamonds, level }) => ({ name, minDiamonds, level })),
+  retentionHours: config.data.retentionHours, maxRetentionHours: config.data.maxRetentionHoursIfUserOptsOut, title: config.overlay.title,
+}));
+
+const ipHits = new Map();
+app.post('/api/submit', (req, res) => {
+  const ip = req.ip || 'x'; const now = Date.now();
+  const hits = (ipHits.get(ip) || []).filter((t) => t > now - 3600e3);
+  if (hits.length >= config.limits.maxSubmissionsPerIpPerHour) return res.status(429).json({ error: 'Too many requests from this device. Please try again later.' });
+  const b = req.body || {};
+  if (!b.consent) return res.status(400).json({ error: 'Please tick the consent box.' });
+  const s = (v, max) => String(v || '').trim().slice(0, max);
+  const input = { fullName: s(b.fullName, 80), dob: s(b.dob, 10), motherName: s(b.motherName, 80), fatherName: s(b.fatherName, 80), question: s(b.question, 140) };
+  try { parseDate(input.dob); computeReading(input); } catch (e) { return res.status(400).json({ error: e.message }); }
+  const hours = b.autoDelete === false ? config.data.maxRetentionHoursIfUserOptsOut : config.data.retentionHours;
+  const rec = store.create(input, hours);
+  hits.push(now); ipHits.set(ip, hits);
+  res.json({ code: rec.code, token: rec.token, reportUrl: `/r/${rec.token}`, expiresAt: rec.expiresAt });
+});
+
+app.get('/api/report/:token', (req, res) => {
+  const rec = store.byToken(req.params.token);
+  if (!rec) return res.status(404).json({ error: 'This report has expired or was deleted.' });
+  res.json({ code: rec.code, expiresAt: rec.expiresAt, used: rec.uses > 0, reading: computeReading({ ...rec.input, year: 2026 }) });
+});
+app.delete('/api/report/:token', (req, res) => res.json({ deleted: store.delete(req.params.token) }));
+
+// ---------- admin API ----------
+const admin = express.Router();
+admin.use(requireKey);
+const MASK = '••••••••';
+const publicCfg = () => ({ ...config, llm: { ...config.llm, apiKey: config.llm.apiKey ? MASK : '' } });
+admin.get('/state', (req, res) => res.json({ config: publicCfg(), tiktok: tiktok.status, live: live.snapshot(), submissions: store.count(), voices: VOICE_CHOICES, ttsError: tts.lastError }));
+admin.post('/config', (req, res) => {
+  try {
+    const next = req.body;
+    if (!next || typeof next !== 'object' || !Array.isArray(next.tiers)) throw new Error('Invalid config');
+    if (next.llm && next.llm.apiKey === MASK) next.llm.apiKey = config.llm.apiKey;
+    saveConfig(next); config = loadConfig(); live.config = config; broadcastState();
+    res.json({ ok: true, config: publicCfg() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+admin.post('/connect', async (req, res) => {
+  try { const u = req.body.username || config.tiktok.username; res.json(await tiktok.connect(u)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+admin.post('/disconnect', async (req, res) => { await tiktok.disconnect(); res.json(tiktok.status); });
+admin.post('/new-stream', (req, res) => { live.newStream(); res.json({ ok: true }); });
+admin.post('/skip', (req, res) => { live.skip(); res.json({ ok: true }); });
+admin.post('/clear', (req, res) => { live.clearQueue(); res.json({ ok: true }); });
+admin.post('/pause', (req, res) => { live.setPaused(!!req.body.paused); broadcastState(); res.json({ paused: live.paused }); });
+admin.post('/delete-all-data', (req, res) => res.json({ deleted: store.deleteAll() }));
+
+// Simulator: fake TikTok events so you can test without going live
+admin.post('/sim/gift', (req, res) => {
+  const { userId = 'sim_' + (req.body.nickname || 'viewer'), nickname = 'Viewer', giftName = 'Rose', diamonds = 1 } = req.body;
+  res.json(live.handleGift({ userId, nickname, giftName, diamonds: Number(diamonds) }));
+});
+admin.post('/sim/chat', (req, res) => {
+  const { userId = 'sim_' + (req.body.nickname || 'viewer'), nickname = 'Viewer', comment = '' } = req.body;
+  res.json(live.handleChat({ userId, nickname, comment }));
+});
+admin.post('/sim/comment', (req, res) => {
+  const { nickname = 'Viewer', comment = '', isFollower = false } = req.body;
+  res.json(live.handleChat({ userId: req.body.userId || 'sim_' + nickname, nickname, comment, isFollower: !!isFollower }));
+});
+admin.post('/say', (req, res) => { live.sayNow(String(req.body.text || 'Hello my dears, I am Mystic Mira.').slice(0, 400)); res.json({ ok: true }); });
+admin.post('/test-llm', async (req, res) => {
+  try { const L = { ...config.llm, ...(req.body || {}) }; if (L.apiKey === MASK) L.apiKey = config.llm.apiKey; res.json({ ok: true, text: await llmReply(L, { nickname: 'Tester', comment: req.body.comment || 'Hi Mira, will I be lucky this year?' }) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+admin.post('/test-tts', async (req, res) => { const r = await tts.synth(req.body.text || 'Hello, I am Mystic Mira.'); res.json(r ? { ok: true, ...r } : { ok: false, error: tts.lastError || 'TTS disabled' }); });
+admin.post('/sim/like', (req, res) => { live.handleLike({ nickname: req.body.nickname || 'Viewer', count: Number(req.body.count || 10) }); res.json({ ok: true }); });
+admin.post('/sim/follow', (req, res) => { live.handleFollow({ nickname: req.body.nickname || 'Viewer' }); res.json({ ok: true }); });
+admin.post('/sim/submission', (req, res) => {
+  // creates a demo form submission and returns its code
+  const rec = store.create({ fullName: req.body.fullName || 'Ayesha Khan', dob: req.body.dob || '1998-07-23', motherName: req.body.motherName || '', fatherName: req.body.fatherName || '', question: req.body.question || 'Will I find love this year?' }, config.data.retentionHours);
+  res.json({ code: rec.code, reportUrl: `/r/${rec.token}` });
+});
+app.use('/api/admin', admin);
+
+// ---------- WebSocket to overlay + admin ----------
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, 'http://x');
+  const fakeReq = { query: Object.fromEntries(url.searchParams), headers: req.headers, socket: req.socket };
+  if (url.pathname !== '/ws' || !keyOk(fakeReq)) { socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+});
+const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
+const broadcast = (msg) => { const s = JSON.stringify(msg); wss.clients.forEach((c) => c.readyState === 1 && c.send(s)); };
+function statePayload() { return { type: 'state', overlay: config.overlay, voice: { browserLang: config.voice.browserLang, enabled: config.voice.enabled }, trigger: config.trigger, tiers: config.tiers, publicUrl: config.publicUrl, tiktok: tiktok.status, ...live.snapshot() }; }
+function broadcastState() { broadcast(statePayload()); }
+wss.on('connection', (ws) => {
+  send(ws, statePayload());
+  if (live.current) send(ws, live.current.kind === 'reading' ? { type: 'reveal', item: live.current } : { type: 'say', item: live.current });
+  ws.on('message', (raw) => { try { const m = JSON.parse(raw); if (m.type === 'revealDone' && live.current && m.id === live.current.id) { /* timer-driven; ignore */ } } catch {} });
+});
+live.on('reveal', (item) => broadcast({ type: 'reveal', item }));
+live.on('say', (item) => broadcast({ type: 'say', item }));
+live.on('skip', (item) => broadcast({ type: 'skip', id: item.id }));
+live.on('chatQueue', (q) => broadcast({ type: 'chatQueue', chatQueue: q.map(({ id, nickname, comment }) => ({ id, nickname, comment })) }));
+live.on('queue', (queue) => broadcast({ type: 'queue', queue }));
+live.on('idle', () => broadcast({ type: 'idle' }));
+live.on('toast', (t) => broadcast({ type: 'toast', ...t }));
+live.on('gift', (g) => broadcast({ type: 'gift', nickname: g.nickname, giftName: g.giftName, diamonds: g.diamonds }));
+live.on('like', (l) => broadcast({ type: 'like', nickname: l.nickname, count: l.count }));
+live.on('follow', (f) => broadcast({ type: 'follow', nickname: f.nickname }));
+tiktok.on('status', () => broadcastState());
+tiktok.on('log', (m) => console.log(m));
+
+server.listen(config.port, () => {
+  const base = `http://localhost:${config.port}`;
+  const k = config.adminKey ? `?key=${config.adminKey}` : '';
+  console.log('\n🔮  Fortune Live is running');
+  console.log(`   Viewer form (put this link in bio): ${config.publicUrl || base}/`);
+  console.log(`   OBS overlay vertical 1080x1920:   ${base}/overlay${k}`);
+  console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay${k ? k + '&' : '?'}layout=landscape`);
+  console.log(`   Control panel + simulator:        ${base}/admin${k}`);
+  if (!config.adminKey) console.log('   (No adminKey set: overlay and admin only open on this PC. Set "adminKey" in config.json before hosting online.)');
+  console.log('');
+  if (config.tiktok.autoConnect && config.tiktok.username) tiktok.connect(config.tiktok.username).catch((e) => console.log('[tiktok]', e.message));
+});

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fortune Live Overlay</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/overlay.css">
+</head>
+<body>
+<div id="root" class="vertical">
+  <div id="bgBlur"></div>
+  <div id="stage">
+    <!-- Character: one still picture, brought to life in code. Every layer below is positioned in % of the picture. -->
+    <div id="charBox">
+      <img id="still" class="layer" alt="">
+      <video id="baseVid" class="layer" muted playsinline preload="auto" disablepictureinpicture></video>
+      <div id="warm" class="layer"></div>
+      <div id="body" class="layer"><img id="bodyImg" class="layer" alt=""></div>
+      <div id="mouthWrap" class="layer"><div id="mouth"><img id="mouthBase" alt=""><img data-v="1" alt=""><img data-v="2" alt=""><img data-v="3" alt=""></div></div>
+      <div id="lights" class="layer"></div>
+      <div id="sceneTrack" class="layer"></div>
+      <canvas id="scene" class="layer"></canvas>
+      <div id="prophecy" class="layer"><div id="vignette"></div><div id="pTrack" class="layer"><div id="skullAura"></div><div id="pFx"></div></div></div>
+      <canvas id="mist" class="layer"></canvas>
+    </div>
+    <!-- CSS/SVG fallback, only used if no character image can be loaded -->
+    <div id="fallback" class="layer" hidden>
+      <div class="fb-room"></div>
+      <svg class="fb-girl" viewBox="0 0 600 700" aria-hidden="true">
+        <defs>
+          <linearGradient id="robe" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4b2a86"/><stop offset="1" stop-color="#1e1040"/></linearGradient>
+          <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eeeaf8"/><stop offset="1" stop-color="#b9b3d6"/></linearGradient>
+          <radialGradient id="skin" cx=".5" cy=".4" r=".6"><stop offset="0" stop-color="#fff1ea"/><stop offset="1" stop-color="#f3cfc4"/></radialGradient>
+        </defs>
+        <path d="M120 700 C130 470 190 330 300 330 C410 330 470 470 480 700Z" fill="url(#robe)" stroke="#d9b45a" stroke-width="4"/>
+        <path d="M215 200 C215 130 255 100 300 100 C345 100 385 130 385 200 L392 330 L208 330Z" fill="url(#hair)"/>
+        <ellipse cx="300" cy="245" rx="66" ry="78" fill="url(#skin)"/>
+        <path d="M230 210 C250 140 350 140 372 215 C340 180 260 185 230 210Z" fill="url(#hair)"/>
+        <ellipse cx="274" cy="250" rx="11" ry="14" fill="#5b6fb8"/><ellipse cx="326" cy="250" rx="11" ry="14" fill="#5b6fb8"/>
+        <path d="M288 292 Q300 300 312 292" stroke="#c76a7a" stroke-width="4" fill="none" stroke-linecap="round"/>
+      </svg>
+      <div class="fb-ball"></div>
+    </div>
+    <div id="fx" class="layer">
+      <canvas id="sparkles"></canvas>
+      <div id="flash"></div>
+    </div>
+  </div>
+
+  <!-- UI layer -->
+  <header id="titleBar"><div id="title">Fate Reading</div><div id="cta"></div></header>
+
+  <section id="commentBubble" class="panelGlass hidden">
+    <div class="cbAvatar" id="cbAvatar">A</div>
+    <div class="cbBody"><div class="cbName" id="cbName">@viewer</div><div class="cbText" id="cbText">comment</div></div>
+  </section>
+
+  <section id="revealTop" class="panelGlass hidden">
+    <div id="cardWrap"><div id="card"><div class="face back"><div class="sigil">✦</div></div><div class="face front"><div class="cardLabel">Life Path</div><div id="cardNum">7</div><div id="cardTitle">The Seeker</div></div></div></div>
+    <div id="who">
+      <div id="tierBadge">Short reading</div>
+      <div id="name">Name</div>
+      <div id="handle">@viewer</div>
+      <div id="nums"></div>
+    </div>
+  </section>
+
+  <section id="readingBox" class="panelGlass hidden">
+    <div class="speaker">🔮 Mira</div>
+    <div id="readingText"></div>
+    <div id="progress"><div></div></div>
+  </section>
+
+  <section id="idleBox" class="panelGlass">
+    <div class="howTitle">✨ Get your numerology reading ✨</div>
+    <ol class="steps">
+      <li><b>1</b> Open the <u>link in bio</u> &amp; enter your details privately</li>
+      <li><b>2</b> You get a code like <span class="code">A17</span></li>
+      <li><b>3</b> Send <span id="giftTxt">1 Rose 🌹</span> and comment your code</li>
+    </ol>
+    <div id="tiersRow"></div>
+  </section>
+
+  <aside id="queueBox" class="panelGlass empty"><div class="qTitle">🔮 Next readings</div><ul id="queueList"></ul><div id="queueMore"></div><div id="chatWaiting"></div></aside>
+  <div id="toasts"></div>
+  <div id="hearts"></div>
+  <footer id="footer">For entertainment only · Numerology is not scientific and does not predict the future</footer>
+  <div id="soundChip" hidden>🔈 Click once to enable Mira's voice</div>
+
+  <div id="panel" hidden>
+    <h3>Overlay settings</h3>
+    <label><input type="radio" name="layout" value="vertical"> Vertical 1080×1920</label>
+    <label><input type="radio" name="layout" value="landscape"> Landscape 1920×1080</label>
+    <label><input type="checkbox" id="pAudio"> Play Mira's voice in this overlay</label>
+    <label><input type="checkbox" id="pChime"> Chime sound</label>
+    <label><input type="checkbox" id="pQueue"> Show queue</label>
+    <div class="row"><button id="pTest">Test reveal (local)</button><button id="pTalk">Test talk (local)</button></div>
+    <div class="row"><a id="pAdmin" target="_blank">Open control panel ↗</a></div>
+    <small>Press <b>C</b> to hide. These switches are saved in this browser only. Everything else is in the control panel.</small>
+    <pre id="pDiag"></pre>
+  </div>
+  <div id="conn" title="server connection"></div>
+</div>
+<script src="/lipsync.js"></script>
+<script src="/overlay.js"></script>
+</body>
+</html>

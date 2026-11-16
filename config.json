@@ -1,0 +1,134 @@
+{
+  "port": 3000,
+  "publicUrl": "",
+  "adminKey": "",
+  "tiktok": {
+    "username": "",
+    "autoConnect": false,
+    "signApiKey": ""
+  },
+  "trigger": {
+    "giftName": "Rose",
+    "minDiamonds": 1,
+    "acceptOtherGifts": true
+  },
+  "tiers": [
+    {
+      "name": "Short reading",
+      "minDiamonds": 1,
+      "level": 1,
+      "secondsOnScreen": 20
+    },
+    {
+      "name": "Extended reading",
+      "minDiamonds": 30,
+      "level": 2,
+      "secondsOnScreen": 30
+    },
+    {
+      "name": "Destiny scroll",
+      "minDiamonds": 100,
+      "level": 3,
+      "secondsOnScreen": 45
+    }
+  ],
+  "limits": {
+    "readingsPerUserPerStream": 1,
+    "usesPerCode": 1,
+    "maxQueueLength": 30,
+    "giftCreditMinutes": 10,
+    "secondsBetweenReadings": 3,
+    "maxSubmissionsPerIpPerHour": 10
+  },
+  "data": {
+    "retentionHours": 24,
+    "maxRetentionHoursIfUserOptsOut": 168
+  },
+  "overlay": {
+    "title": "Mystic Mira's Fate Reading",
+    "callToAction": "Link in bio \u2192 get your code \u2192 send 1 Rose \u2192 comment your code",
+    "characterImage": "/assets/mira2.jpg",
+    "showQueue": true,
+    "queueVisibleCount": 5,
+    "showLikeHearts": true,
+    "showFollowToasts": true,
+    "character": {
+      "mode": "video",
+      "video": {
+        "src": "/assets/mira2-idle-loop-1080.mp4",
+        "src720": "/assets/mira2-idle-loop-720.mp4",
+        "quality": "auto",
+        "track": "/assets/mira2-idle-loop.track.json",
+        "poster": "/assets/mira2v-poster.jpg",
+        "toneMatch": true
+      },
+      "still": "/assets/mira2.jpg",
+      "breathing": {
+        "enabled": true,
+        "amount": 0.0045,
+        "seconds": 4.6
+      },
+      "mouth": {
+        "enabled": true,
+        "leadMs": 30,
+        "fadeMs": 45
+      },
+      "prophecy": {
+        "enabled": true,
+        "tiers": [
+          1,
+          2,
+          3
+        ],
+        "voiceOffset": 1.8,
+        "minSeconds": 3
+      }
+    },
+    "effects": {
+      "sparkles": true,
+      "sparkleCount": 28,
+      "ballGlow": true,
+      "floatingCards": false
+    },
+    "showChat": true,
+    "browserVoiceFallback": true
+  },
+  "voice": {
+    "enabled": true,
+    "voice": "en-US-AvaNeural",
+    "urduVoice": "ur-PK-UzmaNeural",
+    "hindiVoice": "hi-IN-SwaraNeural",
+    "rate": "+2%",
+    "pitch": "+6%",
+    "browserLang": "en-US",
+    "readingSpeechStart": 3,
+    "talkSpeechStart": 0.6,
+    "tailSeconds": 1.2,
+    "minSaySeconds": 3
+  },
+  "chat": {
+    "enabled": true,
+    "mode": "everyone",
+    "userCooldownSeconds": 60,
+    "maxQueue": 8,
+    "maxCommentAgeSeconds": 90,
+    "secondsBetweenReplies": 1.5,
+    "idlePromptSeconds": 45,
+    "idlePrompts": [],
+    "greetGifters": true,
+    "greetFollowers": true,
+    "greetCooldownSeconds": 20,
+    "maxReplyWords": 45,
+    "greetDelaySeconds": 4
+  },
+  "llm": {
+    "enabled": false,
+    "baseUrl": "",
+    "apiKey": "",
+    "model": "",
+    "temperature": 0.9,
+    "maxTokens": 120,
+    "timeoutMs": 8000,
+    "extraPersona": ""
+  }
+}

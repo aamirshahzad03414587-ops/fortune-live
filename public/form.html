@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get your numerology code</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Quicksand:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <img src="/assets/mira2.jpg" alt="" onerror="this.style.display='none'">
+    <h1 id="ttl">Your Numbers, Your Fate</h1>
+    <p class="sub">Private numerology reading for the LIVE. Your details stay here, never in the comments.</p>
+  </div>
+
+  <form id="f" class="card" autocomplete="off">
+    <label for="fullName">Full name at birth <small>(as on your birth certificate)</small></label>
+    <input type="text" id="fullName" name="fullName" required maxlength="80" placeholder="e.g. Ayesha Noor Khan">
+
+    <label for="dob">Date of birth</label>
+    <input type="date" id="dob" name="dob" required min="1900-01-01" max="2026-12-31">
+
+    <label for="motherName">Mother's full name <small>(optional, for family influence)</small></label>
+    <input type="text" id="motherName" name="motherName" maxlength="80">
+
+    <label for="fatherName">Father's full name <small>(optional)</small></label>
+    <input type="text" id="fatherName" name="fatherName" maxlength="80">
+
+    <label for="question">One question for the reading <small>(optional, short)</small></label>
+    <textarea id="question" name="question" rows="2" maxlength="140" placeholder="e.g. Will I find love this year?"></textarea>
+
+    <label class="check"><input type="checkbox" id="consent" required> <span>I agree that these details are used only to calculate my numerology reading. Only my first name, my numbers and a short reading are shown on the LIVE. Nothing is shared or sold.</span></label>
+    <label class="check"><input type="checkbox" id="autoDelete" checked> <span>Auto-delete my details after <b id="ret">24</b> hours <small>(if unticked, kept up to <span id="maxret">7 days</span> so you can reopen your report)</small></span></label>
+
+    <button type="submit" id="go">🔮 Get my code</button>
+    <div class="err" id="err"></div>
+    <p class="note">For entertainment only. Numerology is a traditional practice, not science, and it cannot predict the future.</p>
+  </form>
+
+  <div id="done" class="card codeBox" hidden>
+    <h2>Your code</h2>
+    <div class="bigCode" id="code">A17</div>
+    <button class="copy" type="button" id="copyCode">Copy code</button>
+    <ol class="steps">
+      <li>Go back to the LIVE.</li>
+      <li>Send <b id="giftName">1 Rose 🌹</b>.</li>
+      <li>Comment your code: <b id="code2">#A17</b></li>
+      <li>Watch the fortune-teller reveal your numbers on screen ✨</li>
+    </ol>
+    <p id="tiers" class="note"></p>
+    <a class="btn" id="reportLink" href="#">📜 Open my full private report</a>
+    <p class="note">Save this link. It is private, so don't post it in the comments.</p>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+fetch('/api/public-config').then(r => r.json()).then(c => {
+  $('ret').textContent = c.retentionHours;
+  $('maxret').textContent = c.maxRetentionHours >= 48 ? Math.round(c.maxRetentionHours / 24) + ' days' : c.maxRetentionHours + ' hours';
+  const g = c.trigger; $('giftName').textContent = g.minDiamonds > 1 ? `a gift worth ${g.minDiamonds}+ coins` : `1 ${g.giftName || 'gift'}${/rose/i.test(g.giftName) ? ' 🌹' : ''}`;
+  if (c.tiers.length > 1) $('tiers').textContent = 'Bigger gifts unlock longer readings: ' + c.tiers.map(t => `${t.minDiamonds}+ coins = ${t.name}`).join(' · ');
+});
+$('f').onsubmit = async (e) => {
+  e.preventDefault(); $('err').textContent = '';
+  if (!$('consent').checked) { $('err').textContent = 'Please tick the consent box.'; return; }
+  $('go').disabled = true; $('go').textContent = 'Reading the stars…';
+  try {
+    const body = { fullName: $('fullName').value, dob: $('dob').value, motherName: $('motherName').value, fatherName: $('fatherName').value, question: $('question').value, consent: true, autoDelete: $('autoDelete').checked };
+    const r = await fetch('/api/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Something went wrong');
+    $('code').textContent = d.code; $('code2').textContent = '#' + d.code; $('reportLink').href = d.reportUrl;
+    try { localStorage.setItem('fl_last', JSON.stringify(d)); } catch {}
+    $('f').hidden = true; $('done').hidden = false; scrollTo(0, 0);
+  } catch (err) { $('err').textContent = err.message; }
+  $('go').disabled = false; $('go').textContent = '🔮 Get my code';
+};
+$('copyCode').onclick = () => navigator.clipboard?.writeText('#' + $('code').textContent).then(() => $('copyCode').textContent = 'Copied ✓');
+</script>
+</body>
+</html>

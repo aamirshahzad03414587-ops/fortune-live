@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fortune Live · Control panel</title>
+<style>
+  body { margin:0; font-family: 'Segoe UI', system-ui, sans-serif; background:#120a24; color:#eee; }
+  header { padding:14px 22px; background:#22113f; border-bottom:2px solid #c99a3c; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:20px; color:#f4d27a; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:16px; padding:16px; }
+  .box { background:#1d1036; border:1px solid #4a2f80; border-radius:12px; padding:16px; }
+  .box h2 { margin:0 0 10px; font-size:16px; color:#f4d27a; }
+  label { display:block; font-size:13px; margin:8px 0 3px; color:#cbb8ff; }
+  input, select, textarea { width:100%; box-sizing:border-box; padding:8px; border-radius:8px; border:1px solid #5b3fa0; background:#120a24; color:#fff; font-size:14px; }
+  textarea { font-family: Consolas, monospace; font-size:12px; }
+  button { padding:8px 12px; margin:4px 4px 0 0; border:0; border-radius:8px; background:#f4d27a; color:#2a0f4a; font-weight:700; cursor:pointer; }
+  button.alt { background:#5b3fa0; color:#fff; } button.red { background:#e05a5a; color:#fff; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .status { padding:4px 10px; border-radius:999px; background:#444; font-size:13px; }
+  .status.connected { background:#2f8f4e; } .status.error { background:#a33; } .status.connecting { background:#a77a1a; }
+  code { background:#000; padding:2px 6px; border-radius:6px; font-size:12px; word-break:break-all; }
+  #log { height:160px; overflow:auto; background:#000; padding:8px; font-family:Consolas,monospace; font-size:12px; border-radius:8px; }
+  ul { padding-left:18px; margin:6px 0; } small { color:#aaa; }
+</style>
+</head>
+<body>
+<header><h1>🔮 Fortune Live · Control panel</h1><span class="status" id="st">…</span><span id="stats"></span></header>
+<div class="grid">
+  <div class="box">
+    <h2>1 · TikTok LIVE connection</h2>
+    <label>Your TikTok username (without @)</label>
+    <div class="row"><input id="user" placeholder="yourname"><button id="conn">Connect</button><button class="alt" id="disc">Disconnect</button></div>
+    <small>Go LIVE first (phone or TikTok LIVE Studio), then click Connect. Connecting starts a new stream: per-viewer counters reset.</small>
+    <h2 style="margin-top:16px">Overlay links (OBS / LIVE Studio browser source)</h2>
+    <p>Vertical 1080×1920: <code id="u1"></code></p>
+    <p>Landscape 1920×1080: <code id="u2"></code></p>
+    <p>Viewer form (link in bio): <code id="u3"></code></p>
+  </div>
+
+  <div class="box">
+    <h2>2 · Queue</h2>
+    <div id="now"><small>Nothing on screen</small></div>
+    <ul id="q"></ul>
+    <small>Comments waiting for Mira: <span id="chatQ">—</span></small><br>
+    <button id="pause" class="alt">Pause</button><button id="skip" class="alt">Skip / stop speaking</button><button id="clear" class="alt">Clear queue</button><button id="newStream" class="alt">Reset counters (new stream)</button>
+  </div>
+
+  <div class="box">
+    <h2>3 · Simulator (test without going live)</h2>
+    <label>Viewer nickname</label><input id="sNick" value="Ayesha_99">
+    <div class="row"><div><label>Code</label><input id="sCode" placeholder="A17"></div><div><label>&nbsp;</label><button id="sNew" class="alt">Make demo form entry</button></div></div>
+    <label>Gift</label>
+    <select id="sGift"><option value="Rose|1">Rose (1)</option><option value="Finger Heart|5">Finger Heart (5)</option><option value="Doughnut|30">Doughnut (30)</option><option value="Hand Hearts|100">Hand Hearts (100)</option><option value="Corgi|299">Corgi (299)</option></select>
+    <button id="sGiftBtn">🎁 Send gift</button><button id="sChat">💬 Comment code</button><button id="sLike" class="alt">❤️ Likes</button><button id="sFollow" class="alt">➕ Follow</button>
+    <button id="sDemo">▶ Run 3-viewer demo</button>
+    <label>Fake chat comment (Mira replies one by one)</label>
+    <div class="row"><input id="sText" value="Hi Mira! Will I find love this year?"><button id="sSay">💬 Send comment</button></div>
+    <label><input type="checkbox" id="sFollower" style="width:auto"> this viewer is a follower</label>
+    <button id="sChatDemo" class="alt">▶ Chat demo (5 comments)</button>
+  </div>
+
+  <div class="box">
+    <h2>5 · Mira: chat replies</h2>
+    <label><input type="checkbox" id="chEnabled" style="width:auto"> Reply to comments (one by one)</label>
+    <div class="row"><div><label>Who she replies to</label><select id="chMode"><option value="everyone">Everyone</option><option value="followers">Followers only</option><option value="gifters">Gifters only</option><option value="followersOrGifters">Followers or gifters</option></select></div>
+    <div><label>Max comments waiting</label><input id="chMax" type="number" min="1"></div></div>
+    <div class="row"><div><label>Per-viewer cooldown (s)</label><input id="chCool" type="number" min="0"></div><div><label>Ignore comments older than (s)</label><input id="chAge" type="number" min="5"></div></div>
+    <div class="row"><div><label>Ask the audience after silence (s, 0 = off)</label><input id="chIdle" type="number" min="0"></div><div><label>Pause between replies (s)</label><input id="chGap" type="number" min="0" step="0.5"></div></div>
+    <label><input type="checkbox" id="chGG" style="width:auto"> Thank new gifters</label>
+    <label><input type="checkbox" id="chGF" style="width:auto"> Welcome new followers</label>
+    <label>Custom audience questions (one per line, optional)</label><textarea id="chPrompts" rows="3"></textarea>
+    <small>Spam, links and swear words are skipped automatically. Readings always go before chat.</small>
+  </div>
+
+  <div class="box">
+    <h2>6 · Voice & prophecy</h2>
+    <label><input type="checkbox" id="vEnabled" style="width:auto"> Server voice (free Microsoft Edge neural voices, works inside OBS)</label>
+    <div class="row"><div><label>Voice</label><select id="vVoice"></select></div><div><label>Urdu-script voice</label><select id="vUrdu"></select></div></div>
+    <div class="row"><div><label>Speed (e.g. -4%)</label><input id="vRate"></div><div><label>Pitch (e.g. +6%)</label><input id="vPitch"></div></div>
+    <div class="row"><input id="vText" value="Hello my dears, I am Mystic Mira. Tell me your birth day and month."><button id="vSay">🔊 Mira says it</button></div>
+    <small id="vErr"></small>
+    <label style="margin-top:12px"><input type="checkbox" id="pEnabled" style="width:auto"> Skull prophecy reveal for readings</label>
+    <div class="row"><div><label>Tiers that use it (e.g. 1,2,3)</label><input id="pTiers"></div><div><label>Voice starts after (s)</label><input id="pOffset" type="number" step="0.1" min="0"></div><div><label>Lip-sync lead (ms)</label><input id="mLead" type="number" step="5" min="-200" max="200"></div></div>
+    <label><input type="checkbox" id="mEnabled" style="width:auto"> Lip-sync mouth (follows her voice)</label>
+    <div class="row"><div><label>Mira animation</label><select id="chMode"><option value="video">Video (generated idle loop + tracked lip sync)</option><option value="still">Still picture (fallback)</option></select></div><div><label>Video quality</label><select id="chQuality"><option value="auto">Auto</option><option value="1080">1080p</option><option value="720">720p</option></select></div></div>
+    <label><input type="checkbox" id="bEnabled" style="width:auto"> Breathing (still mode)</label>
+  </div>
+
+  <div class="box">
+    <h2>7 · AI replies (optional)</h2>
+    <small>Without a key Mira uses her built-in reply engine (free). With a key she writes fresh replies. Any OpenAI-compatible API works.</small>
+    <label><input type="checkbox" id="lEnabled" style="width:auto"> Use AI replies</label>
+    <label>Provider preset</label><select id="lPreset"><option value="">Custom</option><option value="https://api.x.ai/v1">xAI</option><option value="https://api.openai.com/v1">OpenAI</option><option value="https://openrouter.ai/api/v1">OpenRouter</option><option value="https://api.groq.com/openai/v1">Groq</option></select>
+    <label>Base URL</label><input id="lBase" placeholder="https://api.x.ai/v1">
+    <div class="row"><div><label>Model</label><input id="lModel" placeholder="model name from your provider"></div><div><label>API key</label><input id="lKey" type="password" placeholder="paste key"></div></div>
+    <button id="lTest" class="alt">Test AI reply</button> <small id="lOut"></small>
+  </div>
+
+  <div class="box">
+    <h2>4 · Limits & triggers</h2>
+    <div class="row"><div><label>Trigger gift name</label><input id="cGift"></div><div><label>Min coins (diamonds)</label><input id="cMin" type="number" min="1"></div></div>
+    <label><input type="checkbox" id="cAny" style="width:auto"> Also accept other gifts worth at least the minimum</label>
+    <div class="row"><div><label>Readings per viewer per LIVE</label><input id="lUser" type="number" min="1"></div><div><label>Uses per code</label><input id="lCode" type="number" min="1"></div></div>
+    <div class="row"><div><label>Max queue length</label><input id="lQueue" type="number" min="1"></div><div><label>Gift valid for (minutes)</label><input id="lCredit" type="number" min="1"></div></div>
+    <div class="row"><div><label>Gap between readings (s)</label><input id="lGap" type="number" min="0"></div><div><label>Keep data (hours)</label><input id="dRet" type="number" min="1"></div></div>
+    <label>Tiers (one per line: coins | name | level 1-3 | seconds on screen)</label>
+    <textarea id="cTiers" rows="4"></textarea>
+    <div class="row"><div><label>Overlay title</label><input id="oTitle"></div></div>
+    <button id="save">💾 Save limits</button> <small id="saved"></small>
+    <details><summary><small>Advanced: edit full config.json</small></summary><textarea id="raw" rows="14"></textarea><button id="saveRaw" class="alt">Save raw JSON</button></details>
+  </div>
+
+  <div class="box">
+    <h2>Activity</h2><div id="log"></div>
+    <p><small>Stored form entries: <b id="subs">0</b> (auto-deleted after the retention time)</small></p>
+    <button class="red" id="wipe">Delete ALL viewer data now</button>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const key = new URLSearchParams(location.search).get('key');
+const H = { 'content-type': 'application/json', ...(key ? { 'x-admin-key': key } : {}) };
+const api = async (p, body) => { const r = await fetch('/api/admin' + p, { method: body === undefined ? 'GET' : 'POST', headers: H, body: body === undefined ? undefined : JSON.stringify(body) }); const d = await r.json(); if (!r.ok) throw new Error(d.error || r.status); return d; };
+const log = (t) => { const l = $('log'); l.innerHTML = `<div>${new Date().toLocaleTimeString()} ${String(t).replace(/</g, '&lt;')}</div>` + l.innerHTML; };
+let config, voices = [];
+const k = key ? '?key=' + key : '';
+$('u1').textContent = location.origin + '/overlay' + k;
+$('u2').textContent = location.origin + '/overlay' + (k ? k + '&' : '?') + 'layout=landscape';
+async function load() {
+  const s = await api('/state'); config = s.config; voices = s.voices || []; fill(); if (s.ttsError) $('vErr').textContent = 'Last voice error: ' + s.ttsError; status(s.tiktok); renderQueue(s.live); $('subs').textContent = s.submissions;
+  $('u3').textContent = (config.publicUrl || location.origin) + '/';
+}
+function fill() {
+  const c = config; $('user').value = c.tiktok.username || '';
+  $('cGift').value = c.trigger.giftName; $('cMin').value = c.trigger.minDiamonds; $('cAny').checked = c.trigger.acceptOtherGifts;
+  $('lUser').value = c.limits.readingsPerUserPerStream; $('lCode').value = c.limits.usesPerCode; $('lQueue').value = c.limits.maxQueueLength;
+  $('lCredit').value = c.limits.giftCreditMinutes; $('lGap').value = c.limits.secondsBetweenReadings; $('dRet').value = c.data.retentionHours;
+  $('cTiers').value = c.tiers.map(t => `${t.minDiamonds} | ${t.name} | ${t.level} | ${t.secondsOnScreen}`).join('\n');
+  $('oTitle').value = c.overlay.title; $('raw').value = JSON.stringify(c, null, 2);
+  const ch = c.chat; $('chEnabled').checked = ch.enabled; $('chMode').value = ch.mode; $('chMax').value = ch.maxQueue; $('chCool').value = ch.userCooldownSeconds;
+  $('chAge').value = ch.maxCommentAgeSeconds; $('chIdle').value = ch.idlePromptSeconds; $('chGap').value = ch.secondsBetweenReplies; $('chGG').checked = ch.greetGifters; $('chGF').checked = ch.greetFollowers;
+  $('chPrompts').value = (ch.idlePrompts || []).join('\n');
+  const v = c.voice; $('vEnabled').checked = v.enabled; $('vRate').value = v.rate; $('vPitch').value = v.pitch;
+  const opts = (sel) => (voices.includes(sel) ? voices : [sel, ...voices]).map(x => `<option ${x === sel ? 'selected' : ''}>${x}</option>`).join('');
+  $('vVoice').innerHTML = opts(v.voice); $('vUrdu').innerHTML = opts(v.urduVoice);
+  const P = c.overlay.character.prophecy; $('pEnabled').checked = P.enabled; $('pTiers').value = (P.tiers || []).join(','); $('pOffset').value = P.voiceOffset;
+  const CH = c.overlay.character; $('mLead').value = CH.mouth?.leadMs ?? 30; $('mEnabled').checked = CH.mouth?.enabled !== false; $('bEnabled').checked = CH.breathing?.enabled !== false; $('chMode').value = CH.mode || 'video'; $('chQuality').value = CH.video?.quality || 'auto';
+  const L = c.llm; $('lEnabled').checked = L.enabled; $('lBase').value = L.baseUrl; $('lModel').value = L.model; $('lKey').value = L.apiKey;
+}
+function status(t) { const el = $('st'); el.className = 'status ' + t.state; el.textContent = `TikTok: ${t.state}${t.username ? ' @' + t.username : ''}${t.message ? ' · ' + t.message : ''}`; }
+function renderQueue(l) {
+  $('now').innerHTML = !l.current ? '<small>Nothing on screen</small>' : l.current.kind === 'say' ? `<b>Mira speaking:</b> ${l.current.text}` : `<b>On screen:</b> ${l.current.name} (@${l.current.nickname}) · ${l.current.tierName}`;
+  $('q').innerHTML = (l.queue || []).map(i => `<li>${i.name} (@${i.nickname}) · ${i.tierName} · ${i.code}</li>`).join('');
+  if (l.stats) $('stats').textContent = `gifts ${l.stats.gifts} · coins ${l.stats.diamonds} · likes ${l.stats.likes} · readings ${l.stats.readings}`;
+  $('pause').textContent = l.paused ? 'Resume' : 'Pause'; $('pause').dataset.p = l.paused ? '1' : '';
+}
+$('conn').onclick = async () => { config.tiktok.username = $('user').value.replace(/^@/, ''); await api('/config', config).catch(() => {}); try { await api('/connect', { username: config.tiktok.username }); log('Connected to TikTok LIVE'); } catch (e) { log('Connect failed: ' + e.message); } };
+$('disc').onclick = () => api('/disconnect', {});
+$('pause').onclick = () => api('/pause', { paused: !$('pause').dataset.p }).then(load);
+$('skip').onclick = () => api('/skip', {});  $('clear').onclick = () => api('/clear', {});
+$('newStream').onclick = () => api('/new-stream', {}).then(() => log('Counters reset'));
+$('sNew').onclick = async () => { const d = await api('/sim/submission', {}); $('sCode').value = d.code; log(`Demo form entry: code ${d.code} → ${location.origin}${d.reportUrl}`); };
+$('sGiftBtn').onclick = async () => { const [giftName, diamonds] = $('sGift').value.split('|'); const r = await api('/sim/gift', { nickname: $('sNick').value, giftName, diamonds: +diamonds }); log(`${$('sNick').value} sent ${giftName}: ${r.ok ? (r.item ? 'queued' : 'credited ' + r.credited) : r.reason}`); };
+$('sChat').onclick = async () => { const r = await api('/sim/chat', { nickname: $('sNick').value, comment: '#' + $('sCode').value }); log(`${$('sNick').value} commented #${$('sCode').value}: ${r.ok ? 'queued' : r.reason}`); };
+$('sLike').onclick = () => api('/sim/like', { nickname: $('sNick').value, count: 15 });
+$('sFollow').onclick = () => api('/sim/follow', { nickname: $('sNick').value });
+$('sDemo').onclick = async () => {
+  const ppl = [['Ayesha Khan', '1998-07-23', 'Rose|1', 'Will I find love this year?'], ['Omar Farooq', '1991-11-29', 'Doughnut|30', 'Should I start a business?'], ['Bilal Ahmed', '1985-12-03', 'Hand Hearts|100', 'What about money in 2026?']];
+  for (const [fullName, dob, g, question] of ppl) {
+    const nick = fullName.split(' ')[0] + '_' + Math.floor(Math.random() * 900 + 100);
+    const d = await api('/sim/submission', { fullName, dob, question }); const [giftName, diamonds] = g.split('|');
+    await api('/sim/gift', { nickname: nick, giftName, diamonds: +diamonds }); const r = await api('/sim/chat', { nickname: nick, comment: 'code #' + d.code });
+    log(`${nick}: ${giftName} + #${d.code} → ${r.ok ? r.item.tierName : r.reason}`);
+  }
+};
+$('save').onclick = async () => {
+  const c = structuredClone(config);
+  c.trigger = { giftName: $('cGift').value.trim(), minDiamonds: +$('cMin').value || 1, acceptOtherGifts: $('cAny').checked };
+  Object.assign(c.limits, { readingsPerUserPerStream: +$('lUser').value || 1, usesPerCode: +$('lCode').value || 1, maxQueueLength: +$('lQueue').value || 1, giftCreditMinutes: +$('lCredit').value || 1, secondsBetweenReadings: +$('lGap').value || 0 });
+  c.data.retentionHours = +$('dRet').value || 24;
+  c.tiers = $('cTiers').value.split('\n').map(l => l.split('|').map(s => s.trim())).filter(p => p.length >= 4).map(([m, name, lv, sec]) => ({ minDiamonds: +m, name, level: Math.min(3, Math.max(1, +lv)), secondsOnScreen: +sec }));
+  c.overlay.title = $('oTitle').value;
+  Object.assign(c.chat, { enabled: $('chEnabled').checked, mode: $('chMode').value, maxQueue: +$('chMax').value || 8, userCooldownSeconds: +$('chCool').value || 0, maxCommentAgeSeconds: +$('chAge').value || 90,
+    idlePromptSeconds: +$('chIdle').value || 0, secondsBetweenReplies: +$('chGap').value || 0, greetGifters: $('chGG').checked, greetFollowers: $('chGF').checked, idlePrompts: $('chPrompts').value.split('\n').map(x => x.trim()).filter(Boolean) });
+  Object.assign(c.voice, { enabled: $('vEnabled').checked, voice: $('vVoice').value, urduVoice: $('vUrdu').value, rate: $('vRate').value || '+0%', pitch: $('vPitch').value || '+0Hz' });
+  Object.assign(c.overlay.character.prophecy, { enabled: $('pEnabled').checked, tiers: $('pTiers').value.split(',').map(Number).filter(Boolean), voiceOffset: +$('pOffset').value || 0 });
+  c.overlay.character.mouth = { ...(c.overlay.character.mouth || {}), enabled: $('mEnabled').checked, leadMs: Number($('mLead').value) || 0 };
+  c.overlay.character.breathing = { ...(c.overlay.character.breathing || {}), enabled: $('bEnabled').checked };
+  c.overlay.character.mode = $('chMode').value; c.overlay.character.video = { ...(c.overlay.character.video || {}), quality: $('chQuality').value };
+  Object.assign(c.llm, { enabled: $('lEnabled').checked, baseUrl: $('lBase').value.trim(), model: $('lModel').value.trim(), apiKey: $('lKey').value.trim() });
+  try { const r = await api('/config', c); config = r.config; fill(); $('saved').textContent = 'Saved ✓ (applies immediately)'; } catch (e) { $('saved').textContent = 'Error: ' + e.message; }
+};
+$('saveRaw').onclick = async () => { try { const r = await api('/config', JSON.parse($('raw').value)); config = r.config; fill(); log('config.json saved'); } catch (e) { log('Invalid JSON: ' + e.message); } };
+$('sSay').onclick = async () => { const r = await api('/sim/comment', { nickname: $('sNick').value, comment: $('sText').value, isFollower: $('sFollower').checked }); log(`💬 ${$('sNick').value}: "${$('sText').value}" → ${r.ok ? 'queued for Mira' : 'skipped (' + r.reason + ')'}`); };
+$('sChatDemo').onclick = async () => {
+  const list = [['Zainab_07', 'Assalam o alaikum Mira!'], ['rohan.k', 'will I get married this year?'], ['spam_bot', 'free followers at www.cheap.com'], ['Hira_x', 'born 14 march 1996'], ['omar.fq', 'who are you?'], ['Sana_22', 'kya meri job lagegi?']];
+  for (const [n, t] of list) { const r = await api('/sim/comment', { nickname: n, comment: t }); log(`💬 ${n}: "${t}" → ${r.ok ? 'queued' : 'skipped (' + r.reason + ')'}`); }
+};
+$('vSay').onclick = () => api('/say', { text: $('vText').value }).then(() => log('Mira will say it next'));
+$('lPreset').onchange = () => { if ($('lPreset').value) $('lBase').value = $('lPreset').value; };
+$('lTest').onclick = async () => { $('lOut').textContent = 'asking…'; try { const r = await api('/test-llm', { baseUrl: $('lBase').value, model: $('lModel').value, apiKey: $('lKey').value }); $('lOut').textContent = '✓ ' + r.text; } catch (e) { $('lOut').textContent = '✗ ' + e.message; } };
+$('wipe').onclick = async () => { if (confirm('Delete all stored viewer details?')) { const r = await api('/delete-all-data', {}); log(`Deleted ${r.deleted} entries`); load(); } };
+function ws() {
+  const s = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${key ? '?key=' + key : ''}`);
+  s.onmessage = (e) => { const m = JSON.parse(e.data);
+    if (m.type === 'state') { status(m.tiktok); renderQueue(m); }
+    if (m.type === 'queue') load();
+    if (m.type === 'toast') log(m.text);
+    if (m.type === 'gift') log(`🎁 ${m.nickname}: ${m.giftName} (${m.diamonds})`);
+    if (m.type === 'reveal') { log(`🔮 Revealing ${m.item.name} (@${m.item.nickname})${m.item.speech?.server ? '' : ' (no server voice)'}`); load(); }
+    if (m.type === 'say') log(`🗣️ Mira (${m.item.sub}${m.item.source === 'llm' ? ', AI' : ''}): ${m.item.text}`);
+    if (m.type === 'chatQueue') $('chatQ').textContent = m.chatQueue.length ? m.chatQueue.map(c => '@' + c.nickname + ': ' + c.comment).join(' | ') : '—'; };
+  s.onclose = () => setTimeout(ws, 2000);
+}
+load().catch(e => document.body.innerHTML = '<p style="padding:20px">' + e.message + '</p>'); ws();
+</script>
+</body>
+</html>

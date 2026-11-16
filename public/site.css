@@ -1,0 +1,37 @@
+:root { --gold:#f4d27a; --gold2:#c99a3c; --violet:#b48cff; --bg:#130926; }
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; font-family:'Quicksand','Segoe UI',system-ui,sans-serif; color:#f6f0ff; background:#130926; }
+body::before { content:''; position:fixed; inset:0; z-index:-2; background: url('/assets/mira-character.png') center/cover no-repeat, radial-gradient(#4b2a86,#120830); filter: blur(14px) brightness(.45) saturate(1.2); transform:scale(1.08); }
+body::after { content:''; position:fixed; inset:0; z-index:-1; background-image: radial-gradient(2px 2px at 20% 30%, #fff8, transparent), radial-gradient(1.5px 1.5px at 70% 20%, #fff9, transparent), radial-gradient(2px 2px at 40% 80%, #f4d27a99, transparent), radial-gradient(1.5px 1.5px at 85% 65%, #fff8, transparent); }
+.wrap { max-width:640px; margin:0 auto; padding:28px 18px 60px; }
+.hero { text-align:center; }
+.hero img { width:120px; height:120px; object-fit:cover; object-position:62% 22%; border-radius:50%; border:3px solid var(--gold); box-shadow:0 0 30px #a67bffaa; }
+h1 { font-family:'Cinzel Decorative',Georgia,serif; color:var(--gold); font-size:30px; margin:12px 0 6px; text-shadow:0 0 14px #ffcf7a66; }
+h2 { font-family:'Cinzel Decorative',Georgia,serif; color:var(--gold); font-size:22px; margin:0 0 8px; }
+.sub { color:#d9ccff; margin:0 0 18px; }
+.card { background: linear-gradient(180deg, rgba(45,20,90,.85), rgba(20,8,45,.9)); border:1.5px solid rgba(244,210,122,.55); border-radius:20px; padding:22px; box-shadow:0 0 40px rgba(140,80,255,.25); margin-bottom:18px; }
+label { display:block; font-weight:700; margin:14px 0 6px; }
+label small { font-weight:500; color:#bfaee8; }
+input[type=text], input[type=date], textarea { width:100%; padding:13px 14px; font-size:17px; border-radius:12px; border:1.5px solid #6b4bb5; background:#1d0f3d; color:#fff; font-family:inherit; }
+input:focus, textarea:focus { outline:none; border-color:var(--gold); box-shadow:0 0 0 3px #f4d27a33; }
+.check { display:flex; gap:10px; align-items:flex-start; font-weight:500; margin:12px 0; }
+.check input { width:20px; height:20px; margin-top:2px; accent-color: var(--gold2); flex:none; }
+button, .btn { display:inline-block; width:100%; padding:15px; font-size:18px; font-weight:800; border:0; border-radius:14px; cursor:pointer; color:#2a0f4a; background:linear-gradient(90deg,var(--gold2),var(--gold)); box-shadow:0 6px 20px #f4d27a44; text-align:center; text-decoration:none; }
+button.ghost { background:transparent; color:#ffb4b4; border:1.5px solid #ff9a9a88; box-shadow:none; font-weight:700; }
+.err { color:#ffb0b0; margin-top:10px; min-height:1em; }
+.note { font-size:14px; color:#c9b9ef; line-height:1.5; }
+.codeBox { text-align:center; }
+.bigCode { font-family:'Quicksand','Segoe UI',sans-serif; font-weight:800; font-size:76px; color:#fff; letter-spacing:4px; text-shadow:0 0 24px #c79bff; margin:6px 0; }
+.steps { text-align:left; line-height:1.7; padding-left:22px; }
+.copy { width:auto; padding:8px 16px; font-size:15px; margin:4px; }
+.numgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:12px; margin:14px 0 4px; }
+.medal { text-align:center; padding:12px 6px; border-radius:16px; background:rgba(255,255,255,.05); border:1px solid #f4d27a44; }
+.medal b { display:flex; margin:0 auto 6px; width:60px; height:60px; border-radius:50%; align-items:center; justify-content:center; font-family:'Cinzel Decorative',Georgia,serif; font-size:26px; color:var(--gold); background: radial-gradient(circle at 40% 35%, #7b4ce0, #2b1260); border:2px solid var(--gold); }
+.medal span { font-size:13px; color:#d9ccff; }
+.sec h3 { margin:0 0 4px; font-size:19px; }
+.sec h3 em { font-style:normal; color:var(--gold); }
+.sec p { margin:6px 0 0; line-height:1.6; color:#efe6ff; }
+.pill { display:inline-block; font-size:12px; padding:3px 10px; border-radius:999px; background:#f4d27a22; color:var(--gold); border:1px solid #f4d27a66; margin-left:6px; vertical-align:middle; }
+.disclaimer { text-align:center; font-size:13px; color:#cbbbee; margin-top:20px; }
+.calc { font-size:13px; color:#b9a8e6; margin-top:6px; }
+@media print { body::before, body::after, .noprint { display:none !important; } body { background:#fff; color:#000; } .card { box-shadow:none; background:#fff; color:#000; border-color:#999; } .sec p { color:#000; } }
