@@ -2,7 +2,7 @@
 
 An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime fortune-teller who **talks out loud**.
 
-* **Readings:** viewers fill in a **private web form** (name, date of birth, optional parents' names, one question) and get a code like **A17**. They send **1 Rose** and comment the code. Mira lays her hand on her skull, its eyes glow purple, and she **speaks** their reading while their name, numbers and text appear on screen. The **full report stays private** on the website.
+* **Readings (in the comments):** viewers just comment their **name and birth date**, plus an optional question and optional mother/father names, e.g. `Sara 12/05/1998 mother Hina father Ali will I travel this year?`. Mira lays her hand on her skull, its eyes glow purple, and she **speaks** a short prediction (15–25 s): their Life Path, their Personal Year 2026 and an answer to their question themed by their numbers. Their name, date and question show in the caption bubble. No form, no codes, no gift needed (for now): one reading per viewer per LIVE, a queue cap for free readings, and gifters jump the queue (bigger gift = longer reading). Every ~75 s she reminds people how to ask.
 * **Chat:** Mira **answers comments one by one** with a real voice, thanks gifters, welcomes followers, and asks the audience questions when chat goes quiet. Readings always come first.
 
 > **For entertainment only.** Numerology is a traditional practice, not science. The overlay, form and report all say so. Keep it that way on TikTok.
@@ -68,7 +68,23 @@ Add a source → **Link / Browser source** (the name varies by version) → past
 
 ---
 
-## Viewers must be able to reach the form (link in bio)
+## Predictions from comments (default)
+
+Settings live in `config.json` → `readings` (or **4b · Predictions from comments** in the control panel):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `fromComments` | `true` | A comment with a full birth date becomes a reading. Comments without a date get normal chat answers. |
+| `requireGift` | `false` | `true` = the viewer must send the trigger gift first (their date comment waits up to `giftCreditMinutes`). |
+| `perViewerPerStream` | `1` | Readings per viewer per LIVE. |
+| `maxQueue` | `10` | Max free readings waiting (gifters always get in). |
+| `giftPriority` | `true` | Gifters go first; a gift after the comment moves them up and upgrades the tier. |
+| `howToEverySeconds` | `75` | How often Mira says "Comment your name and birth date for your prediction!" (0 = off). |
+| `privateForm` | `false` | Turn the old private form + codes back on. While off, `/` is a simple landing page and the form/report URLs return 404. |
+
+Dates: `12/05/1998`, `12-5-1998`, `12.05.98`, `12 May 1998`, `12th of May, 1998`, `May 12 1998`, `1998-05-12`. Numbers are read day/month/year; when the second number is over 12 it is read month/day (`05/25/1990`). With no name in the comment, Mira uses the TikTok display name. Parents: `mother Sara`, `mom Sara`, `ammi Sara`, `father Ali`, `dad Ali`, `abbu Ali`.
+
+## Old flow: viewers reach the form (link in bio, only with `readings.privateForm: true`)
 
 `localhost` only works on your PC. Viewers need a public address. Pick one option.
 

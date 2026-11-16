@@ -168,3 +168,4 @@ section, aside { transition: opacity .5s, transform .5s; }
 #panel pre { font-size:14px; color:#9f9; white-space:pre-wrap; }
 #conn { position:absolute; right:8px; top:8px; width:12px; height:12px; border-radius:50%; background:#f55; opacity:.7; }
 #conn.ok { background:#5f5; opacity:.2; }
+.steps.hidden, #tiersRow.hidden { display:none !important; }

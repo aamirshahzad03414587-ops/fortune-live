@@ -3,7 +3,8 @@
 // Events: 'reveal' (reading), 'say' (reply/greet/prompt), 'queue', 'chatQueue', 'toast', 'gift', 'like', 'follow', 'idle', 'skip'
 import { EventEmitter } from 'node:events';
 import { computeReading, liveReading } from './numerology.js';
-import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm, isQuestion, withQuestion, welcomeNames } from './chat.js';
+import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName } from './chat.js';
+import { parseReadingComment, readingScript, showDate } from './comment-reading.js';
 
 export const CODE_RE = /(?:^|[^A-Z0-9])#?([A-HJ-NP-Z]\d{2,4})(?![0-9])/gi;
 export function extractCodes(comment) {
@@ -16,6 +17,10 @@ const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30
   idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 35,
   // viewers joining the LIVE: batched ("Welcome Ali, Sara and 3 others!"), at most one welcome every joinGreetSeconds
   welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 3, readQuestionAloud: true };
+// Readings straight from TikTok comments ("Sara 12/05/1998 will I travel?"). No form, no codes.
+// requireGift=false: everyone who comments a birth date gets one; gifters jump ahead (bigger gift = higher tier).
+export const READINGS_DEFAULTS = { fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
+  freeTierName: 'Live prediction', freeSeconds: 18, howToEverySeconds: 75, privateForm: false };
 const VOICE_DEFAULTS = { readingSpeechStart: 3, talkSpeechStart: 0.5, tailSeconds: 1.2 };
 
 export const estimateSpeechSeconds = (text) => Math.max(1.5, String(text).split(/\s+/).length / 2.6);
@@ -29,6 +34,7 @@ export class LiveEngine extends EventEmitter {
 
   get chatCfg() { return { ...CHAT_DEFAULTS, ...(this.config.chat || {}) }; }
   get voiceCfg() { return { ...VOICE_DEFAULTS, ...(this.config.voice || {}) }; }
+  get readingsCfg() { return { ...READINGS_DEFAULTS, ...(this.config.readings || {}) }; }
   get prophecyCfg() { return this.config.overlay?.character?.prophecy || { enabled: false }; }
 
   /** Reset per-stream counters (on connect or from the admin panel). */
@@ -40,7 +46,7 @@ export class LiveEngine extends EventEmitter {
     this.pendingGiftGreets = []; this.pendingFollowGreets = []; this.lastGreetTime = 0;
     this.pendingJoins = []; this.welcomed = new Set(); this.lastWelcomeTime = -1e12;
     this.prepared = new Map(); // chat id -> Promise<{ text, source, sp }> (reply + voice made while she is still talking)
-    this.lastActivity = 0;
+    this.lastActivity = 0; this.lastHowTo = this.now(); this.pendingDates = new Map(); this.readingVoice = new Map();
     this.stats = { gifts: 0, diamonds: 0, likes: 0, follows: 0, joins: 0, welcomes: 0, readings: 0, replies: 0, startedAt: this.now() };
     this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue);
   }
@@ -72,6 +78,11 @@ export class LiveEngine extends EventEmitter {
     const prev = this.credits.get(g.userId);
     const diamonds = (prev && prev.expiresAt > this.now() ? prev.diamonds : 0) + g.diamonds;
     this.credits.set(g.userId, { diamonds, expiresAt: this.now() + ttl, giftName: g.giftName });
+    // a viewer who already commented their birth date (and was waiting for the gift) or is in the free queue gets upgraded
+    const waitingDate = this.pendingDates.get(g.userId);
+    if (waitingDate && waitingDate.expiresAt > this.now()) { this.pendingDates.delete(g.userId); return this.enqueueCommentReading(waitingDate.c, waitingDate.parsed); }
+    const queued = this.queue.find((q) => q.userId === g.userId && q.source === 'comment');
+    if (queued) { this.upgradeQueued(queued, diamonds); this.pump(); return { ok: true, credited: diamonds, upgraded: true }; }
     const pending = this.pendingCodes.get(g.userId);
     if (pending && pending.expiresAt > this.now()) {
       this.pendingCodes.delete(g.userId);
@@ -84,7 +95,14 @@ export class LiveEngine extends EventEmitter {
   /** { userId, nickname, comment, isFollower?, isGifter? } */
   handleChat(c) {
     this.touch();
-    for (const code of extractCodes(c.comment)) {
+    const R = this.readingsCfg;
+    this.replies.liveReadings = !!R.fromComments;
+    if (R.fromComments) {
+      const bad = filterComment(c.comment);
+      const parsed = ['link', 'profanity', 'spam-repeat'].includes(bad) ? null : parseReadingComment(c.comment, c.nickname);
+      if (parsed) return this.enqueueCommentReading(c, parsed);
+    }
+    if (R.privateForm) for (const code of extractCodes(c.comment)) {
       if (!this.store.byCode(code)) continue;
       const credit = this.credits.get(c.userId);
       if (!credit || credit.expiresAt <= this.now()) {
@@ -200,6 +218,70 @@ export class LiveEngine extends EventEmitter {
     return { ok: true, item };
   }
 
+  // ------------------------------------------------------------------ readings from comments
+  /** c = { userId, nickname, comment }, parsed = parseReadingComment(...) */
+  enqueueCommentReading(c, parsed) {
+    const R = this.readingsCfg;
+    const credit = this.credits.get(c.userId);
+    const paid = credit && credit.expiresAt > this.now() ? credit.diamonds : 0;
+    if (this.queue.some((q) => q.userId === c.userId) || this.current?.userId === c.userId) return { ok: false, reason: 'already-queued' };
+    const done = this.readingsByUser.get(c.userId) || 0;
+    if (done >= R.perViewerPerStream) { this.toast(`${spokenName(c.nickname)}: you already had your prediction this live 💜`, 'warn'); return { ok: false, reason: 'user-limit' }; }
+    if (R.requireGift && !paid) {
+      this.pendingDates.set(c.userId, { c, parsed, expiresAt: this.now() + this.config.limits.giftCreditMinutes * 60e3 });
+      const gift = this.config.trigger.giftName || 'a gift';
+      this.toast(`${spokenName(c.nickname)}: send ${this.config.trigger.minDiamonds > 1 ? this.config.trigger.minDiamonds + ' coins' : '1 ' + gift} for your prediction ✨`, 'hint');
+      return { ok: false, reason: 'needs-gift' };
+    }
+    const tier = paid ? this.tierFor(paid) : null;
+    // the queue cap only stops free readings; gifters always get in
+    if (!paid && this.queue.length >= R.maxQueue) { this.toast(`The prediction queue is full (${R.maxQueue}). Try again in a few minutes!`, 'warn'); return { ok: false, reason: 'queue-full' }; }
+    let reading;
+    try { reading = computeReading({ fullName: parsed.name, dob: parsed.dob, motherName: parsed.mother, fatherName: parsed.father, question: parsed.question, year: 2026 }); } catch { return { ok: false, reason: 'bad-data' }; }
+    const level = tier ? tier.level : 1;
+    const item = {
+      id: `d${this.now()}${Math.random().toString(36).slice(2, 5)}`, kind: 'reading', source: 'comment', code: parsed.dateText, userId: c.userId, nickname: c.nickname,
+      tierName: tier ? tier.name : R.freeTierName, level, seconds: tier ? Math.min(tier.secondsOnScreen, 18 + level * 6) : R.freeSeconds,
+      priority: paid && R.giftPriority ? 1 + level : 0, at: this.now(), parsed, reading,
+      caption: { icon: '🔮', title: `${parsed.name} · ${showDate(parsed.date)}`, text: parsed.question || [parsed.mother && `Mother: ${parsed.mother}`, parsed.father && `Father: ${parsed.father}`].filter(Boolean).join(' · ') || `@${c.nickname}` },
+      ...readingScript(reading, parsed, level),
+    };
+    if (paid) this.credits.delete(c.userId);
+    this.readingsByUser.set(c.userId, done + 1);
+    this.pendingGiftGreets = this.pendingGiftGreets.filter((g) => g.userId !== c.userId);
+    this.insertByPriority(item);
+    this.prepareReadingVoice(item);
+    this.toast(`🔮 ${item.name} is #${this.queue.indexOf(item) + 1} for a prediction`, 'join');
+    this.emit('queue', this.queue);
+    this.pump();
+    return { ok: true, item };
+  }
+
+  insertByPriority(item) {
+    const at = this.queue.findIndex((q) => (q.priority || 0) < (item.priority || 0));
+    if (at < 0) this.queue.push(item); else this.queue.splice(at, 0, item);
+  }
+
+  /** Make the voice for the next readings while Mira is still busy, so she starts speaking right away. */
+  prepareReadingVoice(item) {
+    if (!this.tts || this.readingVoice.has(item.id) || this.queue.indexOf(item) > 2) return;
+    const text = item.spoken;
+    this.readingVoice.set(item.id, this.speech(text).then((sp) => (sp.text === text ? sp : null)).catch(() => null));
+  }
+
+  /** A viewer waiting in the free queue sent a gift: move them up (and give the longer tier). */
+  upgradeQueued(item, diamonds) {
+    const tier = this.tierFor(diamonds);
+    this.queue.splice(this.queue.indexOf(item), 1);
+    Object.assign(item, { tierName: tier.name, level: tier.level, seconds: Math.min(tier.secondsOnScreen, 18 + tier.level * 6), priority: this.readingsCfg.giftPriority ? 1 + tier.level : 0 },
+      readingScript(item.reading, item.parsed, tier.level));
+    this.readingVoice.delete(item.id); this.prepareReadingVoice(item);
+    this.credits.delete(item.userId);
+    this.insertByPriority(item);
+    this.toast(`✨ ${item.name} moved up to #${this.queue.indexOf(item) + 1}`, 'join');
+    this.emit('queue', this.queue);
+  }
+
   /** Speak custom text next (admin "test voice"). */
   sayNow(text) { this.adminLines = [...(this.adminLines || []), String(text)]; this.pump(); }
 
@@ -220,6 +302,11 @@ export class LiveEngine extends EventEmitter {
       return { kind: 'say', sub: 'greet', text: this.replies.greetFollow(people.map((p) => p.nickname)), caption: { icon: '💫', title: 'New follower', text: welcomeNames(people.map((p) => p.nickname), 3) } };
     }
     if (this.welcomeWait() === 0) return this.takeWelcome();
+    const R = this.readingsCfg;
+    if (R.fromComments && R.howToEverySeconds > 0 && this.now() - this.lastHowTo >= R.howToEverySeconds * 1000 && this.chatQueue.length) {
+      this.lastHowTo = this.now();
+      return { kind: 'say', sub: 'prompt', text: this.replies.howToAsk(), caption: { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } };
+    }
     while (this.chatQueue.length) {
       const c = this.chatQueue.shift();
       this.emit('chatQueue', this.chatQueue);
@@ -229,6 +316,7 @@ export class LiveEngine extends EventEmitter {
   }
 
   pump() {
+    this.replies.liveReadings = !!this.readingsCfg.fromComments;
     if (this.busy || this.paused) return;
     const job = this.nextJob();
     if (!job) {
@@ -256,7 +344,9 @@ export class LiveEngine extends EventEmitter {
       if (this.busy || this.paused || this.now() - this.lastActivity > 15 * 60e3) return;
       this.adminLines = [...(this.adminLines || [])];
       this.busy = true;
-      this.run({ kind: 'say', sub: 'prompt', text: this.replies.idlePrompt(this.chatCfg.idlePrompts) }).catch(() => this.finishCurrent());
+      this.replies.liveReadings = !!this.readingsCfg.fromComments;
+      if (this.replies.liveReadings) this.lastHowTo = this.now();
+      this.run({ kind: 'say', sub: 'prompt', text: this.replies.idlePrompt(this.chatCfg.idlePrompts), caption: this.replies.liveReadings ? { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } : null }).catch(() => this.finishCurrent());
     }, s * 1000);
     this.idleTimer.unref?.();
   }
@@ -268,7 +358,7 @@ export class LiveEngine extends EventEmitter {
     if (L.enabled && L.apiKey && L.baseUrl && L.model) {
       try {
         const ctx = chat.isGifter ? 'This viewer sent a gift tonight.\n' : '';
-        return { text: cleanSpoken(await this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx }), C.maxReplyWords), source: 'llm' };
+        return { text: cleanSpoken(await this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx, liveReadings: !!this.readingsCfg.fromComments }), C.maxReplyWords), source: 'llm' };
       } catch (e) { this.emit('log', `LLM failed, using built-in replies: ${e.message}`); }
     }
     return { text: this.replies.reply(chat.comment, chat).text, source: 'rules' };
@@ -300,11 +390,14 @@ export class LiveEngine extends EventEmitter {
     if (job.kind === 'reading') {
       const P = this.prophecyCfg;
       const prophecy = !!(P.enabled && (P.tiers || [1, 2, 3]).includes(job.level));
-      const text = `${job.name}, here is what your numbers whisper. ${job.sentences.join(' ')}`;
-      const sp = await this.speech(text);
+      const text = job.spoken || `${job.name}, here is what your numbers whisper. ${job.sentences.join(' ')}`;
+      const pre = this.readingVoice.get(job.id); this.readingVoice.delete(job.id);
+      for (const q of this.queue.slice(0, 2)) if (q.source === 'comment') this.prepareReadingVoice(q);
+      const sp = { ...(((pre && (await pre)) || (await this.speech(text)))) };
       sp.start = prophecy ? Number(P.voiceOffset ?? 4.5) : V.readingSpeechStart;
       const total = Math.max(job.seconds || 0, sp.start + sp.duration + V.tailSeconds, prophecy ? Number(P.voiceOffset ?? 1.8) + Number(P.minSeconds ?? 3) : 0);
-      this.current = { ...job, speech: sp, prophecy, seconds: Math.round(total * 10) / 10 };
+      const { reading, parsed, ...show } = job;
+      this.current = { ...show, speech: sp, prophecy, seconds: Math.round(total * 10) / 10 };
       this.stats.readings++;
       this.emit('queue', this.queue);
       this.emit('reveal', this.current);
@@ -341,7 +434,7 @@ export class LiveEngine extends EventEmitter {
   }
 
   skip() { if (this.current) this.emit('skip', this.current); this.finishCurrent(); }
-  clearQueue() { this.queue = []; this.chatQueue = []; this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue); }
+  clearQueue() { this.queue = []; this.readingVoice.clear(); this.chatQueue = []; this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue); }
   setPaused(p) { this.paused = !!p; if (!p) this.pump(); }
   toast(text, kind = 'info') { this.emit('toast', { text, kind }); }
 

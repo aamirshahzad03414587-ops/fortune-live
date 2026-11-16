@@ -32,6 +32,17 @@
       "secondsOnScreen": 45
     }
   ],
+  "readings": {
+    "fromComments": true,
+    "requireGift": false,
+    "perViewerPerStream": 1,
+    "maxQueue": 10,
+    "giftPriority": true,
+    "freeTierName": "Live prediction",
+    "freeSeconds": 18,
+    "howToEverySeconds": 75,
+    "privateForm": false
+  },
   "limits": {
     "readingsPerUserPerStream": 1,
     "usesPerCode": 1,
@@ -46,7 +57,7 @@
   },
   "overlay": {
     "title": "Mystic Mira's Fate Reading",
-    "callToAction": "Link in bio → get your code → send 1 Rose → comment your code",
+    "callToAction": "Comment your name + birth date → get your 2026 prediction 🔮",
     "characterImage": "/assets/mira2.jpg",
     "showQueue": true,
     "queueVisibleCount": 5,

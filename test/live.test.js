@@ -12,6 +12,7 @@ function setup(over = {}) {
   const config = {
     trigger: { giftName: 'Rose', minDiamonds: 1, acceptOtherGifts: true },
     tiers: [{ name: 'Short', minDiamonds: 1, level: 1, secondsOnScreen: 1 }, { name: 'Ext', minDiamonds: 30, level: 2, secondsOnScreen: 1 }, { name: 'Scroll', minDiamonds: 100, level: 3, secondsOnScreen: 1 }],
+    readings: { fromComments: false, privateForm: true }, // legacy flow: private form + codes
     limits: { readingsPerUserPerStream: 1, usesPerCode: 1, maxQueueLength: 2, giftCreditMinutes: 10, secondsBetweenReadings: 0 },
     voice: { readingSpeechStart: 0, talkSpeechStart: 0, tailSeconds: 0, minSaySeconds: 0 },
     chat: { enabled: false, idlePromptSeconds: 0 },

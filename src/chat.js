@@ -184,6 +184,30 @@ const T = {
     fallback: ['{name}, aaj raat aap ke naam par ek sitara chamak raha hai.', '{name}, apni date aur month batayein, main ek raaz bataun gi.', '{name}, cards ko aap ki vibe pasand aayi! Poori reading bio mein.'],
   },
 };
+// Lines used when viewers ask for readings right in the comments (no form, no codes).
+export const LIVE_T = {
+  howTo: [
+    '{name}, it is easy: comment your name and birth date, like Sara 12 May 1998, and add a question if you have one.',
+    'Want your prediction, {name}? Just type your name and birth date in the comments. Your mother and father\'s names are optional.',
+    '{name}, write your name, then your birth date, like Ali 05/03/1995, and I will read your numbers live.',
+  ],
+  privacy: [
+    '{name}, a first name and birth date are enough for me. Share only what you are happy to show everyone.',
+  ],
+  cta: [
+    'Comment your name and birth date for your prediction!',
+    'Want your 2026 prediction? Comment your name and birth date, like Sara 12 May 1998.',
+    'Type your name, birth date and one question, and I will read your numbers live!',
+    'Your numbers are waiting! Comment your name and date of birth, and ask me one question.',
+  ],
+  idlePrompts: [
+    'Who wants a prediction? Comment your name and birth date, like Sara 12 May 1998, and ask me one question.',
+    'Comment your name and birth date for your prediction! Add your mother and father\'s names if you like.',
+    'Tell me your name and date of birth in the comments, and I will reveal your Life Path and your 2026.',
+  ],
+};
+const BIO_RE = /\b(bio|code|form)\b/i;
+
 T['roman-ur'].health = T.en.health; T['roman-ur'].support = T.en.support; T['roman-ur'].aboutMira = T.en.aboutMira;
 T['roman-ur'].privacy = T.en.privacy; T['roman-ur'].prediction = T.en.prediction; T['roman-ur'].question = T['roman-ur'].fallback;
 
@@ -213,10 +237,15 @@ export function spokenName(nickname) {
 }
 
 export class ReplyEngine {
-  constructor({ random = Math.random } = {}) { this.random = random; this.recent = new Map(); }
+  constructor({ random = Math.random, liveReadings = false } = {}) { this.random = random; this.recent = new Map(); this.liveReadings = liveReadings; }
 
   pick(lang, key) {
-    const list = (T[lang] && T[lang][key]) || T.en[key];
+    let list = (T[lang] && T[lang][key]) || T.en[key];
+    if (this.liveReadings) {
+      // readings happen in the comments: never send people to a bio form or codes
+      if (LIVE_T[key] && (lang === 'en' || !T[lang]?.[key] || T[lang][key].some((l) => BIO_RE.test(l)))) list = LIVE_T[key];
+      else { const f = list.filter((l) => !BIO_RE.test(l)); if (f.length) list = f; }
+    }
     const used = this.recent.get(lang + key) || [];
     const fresh = list.map((_, i) => i).filter((i) => !used.includes(i));
     const pool = fresh.length ? fresh : list.map((_, i) => i);
@@ -259,6 +288,8 @@ export class ReplyEngine {
     if (Array.isArray(custom) && custom.length) { const list = { en: { c: custom } }; return this.fill(list.en.c[Math.floor(this.random() * custom.length)], {}); }
     return this.pick('en', 'idlePrompts');
   }
+  /** "Comment your name and birth date for your prediction!" */
+  howToAsk() { return this.pick('en', 'cta'); }
 }
 
 function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
@@ -295,20 +326,25 @@ export function joinNames(names) {
 }
 
 // ---------------------------------------------------------------- LLM (OpenAI-compatible: OpenAI, xAI, OpenRouter, Groq, local)
-export const PERSONA = `You are Mystic Mira, a warm, playful, slightly mysterious anime fortune-teller hosting a TikTok LIVE. You sit at a candle-lit table with a crystal ball and a quill.
+const PERSONA_BASE = `You are Mystic Mira, a warm, playful, slightly mysterious anime fortune-teller hosting a TikTok LIVE. You sit at a candle-lit table with a crystal ball and a quill.
 Rules:
 - Reply in 1 to 2 short sentences, at most 30 words, spoken aloud, so no emojis, lists, hashtags or links.
 - Address the viewer by their name once.
 - Everything is for entertainment. Never state predictions as facts; use playful, hedged wording ("the stars hint", "just for fun").
-- Never ask for private details (full name, parents' names, full date of birth, phone, address) in the public chat. For a full reading, tell them to use the private form in the bio link, get a code, send a Rose and comment the code.
+{{READINGS_RULE}}
 - If a viewer shares their birth day and month (and maybe year), you may mention their Personal Year 2026 or Life Path numbers using Pythagorean numerology: Personal Year = reduce(month + day + 2026 reduced to 1), Life Path = reduce(reduced month + reduced day + reduced year) keeping 11, 22, 33.
 - Health, legal or money questions: be kind and gentle, no medical, legal or financial advice; suggest a professional.
 - Politely refuse hateful, sexual, violent or harmful requests in one sentence and change the subject to the stars.
 - If someone seems in danger or talks about self-harm, gently encourage them to reach out to someone they trust or a local helpline.
 - Reply in the same language and script the viewer used (English, Urdu, Roman Urdu, Hindi, Arabic and so on).
 - Never mention that you are an AI model or name any company.`;
+const FORM_RULE = "- Never ask for private details (full name, parents' names, full date of birth, phone, address) in the public chat. For a full reading, tell them to use the private form in the bio link, get a code, send a Rose and comment the code.";
+const LIVE_RULE = '- For a full prediction, tell them to comment their name and birth date (for example Sara 12 May 1998), and optionally a question; their mother and father names are optional. Never ask for phone numbers or addresses.';
+export const PERSONA = PERSONA_BASE.replace('{{READINGS_RULE}}', FORM_RULE);
+export const LIVE_PERSONA = PERSONA_BASE.replace('{{READINGS_RULE}}', LIVE_RULE);
 
-export async function llmReply(cfg, { nickname, comment, context = '' }, fetchImpl = fetch) {
+export async function llmReply(cfg, { nickname, comment, context = '', liveReadings = false }, fetchImpl = fetch) {
+  const persona = liveReadings ? LIVE_PERSONA : PERSONA;
   const base = String(cfg.baseUrl || '').replace(/\/+$/, '');
   if (!base || !cfg.apiKey || !cfg.model) throw new Error('LLM not configured');
   const ctrl = new AbortController();
@@ -320,7 +356,7 @@ export async function llmReply(cfg, { nickname, comment, context = '' }, fetchIm
       body: JSON.stringify({
         model: cfg.model, temperature: cfg.temperature ?? 0.9, max_tokens: cfg.maxTokens || 120,
         messages: [
-          { role: 'system', content: (cfg.extraPersona ? PERSONA + '\n' + cfg.extraPersona : PERSONA) },
+          { role: 'system', content: (cfg.extraPersona ? persona + '\n' + cfg.extraPersona : persona) },
           { role: 'user', content: `${context}Viewer name: ${spokenName(nickname)}\nTheir comment: "${normalizeComment(comment).slice(0, 200)}"\nReply as Mira.` },
         ],
       }),

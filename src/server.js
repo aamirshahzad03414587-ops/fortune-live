@@ -37,8 +37,11 @@ function requireKey(req, res, next) {
 
 // ---------- public pages ----------
 const pub = path.join(ROOT, 'public');
-app.get('/', (req, res) => res.sendFile(path.join(pub, 'form.html')));
-app.get('/r/:token', (req, res) => res.sendFile(path.join(pub, 'report.html')));
+// readings now happen in the TikTok comments; the old private form + codes only run with readings.privateForm = true
+const formOn = () => !!live.readingsCfg.privateForm;
+const formOnly = (req, res, next) => (formOn() ? next() : res.status(404).json({ error: 'The private form is turned off. Comment your name and birth date on the LIVE instead.' }));
+app.get('/', (req, res) => res.sendFile(path.join(pub, formOn() ? 'form.html' : 'home.html')));
+app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report.html')));
 app.get('/overlay', requireKey, (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
 app.get('/tts/:id.mp3', (req, res) => {
@@ -56,7 +59,7 @@ app.get('/api/public-config', (req, res) => res.json({
 }));
 
 const ipHits = new Map();
-app.post('/api/submit', (req, res) => {
+app.post('/api/submit', formOnly, (req, res) => {
   const ip = req.ip || 'x'; const now = Date.now();
   const hits = (ipHits.get(ip) || []).filter((t) => t > now - 3600e3);
   if (hits.length >= config.limits.maxSubmissionsPerIpPerHour) return res.status(429).json({ error: 'Too many requests from this device. Please try again later.' });
@@ -71,7 +74,7 @@ app.post('/api/submit', (req, res) => {
   res.json({ code: rec.code, token: rec.token, reportUrl: `/r/${rec.token}`, expiresAt: rec.expiresAt });
 });
 
-app.get('/api/report/:token', (req, res) => {
+app.get('/api/report/:token', formOnly, (req, res) => {
   const rec = store.byToken(req.params.token);
   if (!rec) return res.status(404).json({ error: 'This report has expired or was deleted.' });
   res.json({ code: rec.code, expiresAt: rec.expiresAt, used: rec.uses > 0, reading: computeReading({ ...rec.input, year: 2026 }) });
@@ -83,7 +86,7 @@ const admin = express.Router();
 admin.use(requireKey);
 const MASK = '••••••••';
 const publicCfg = () => ({ ...config, llm: { ...config.llm, apiKey: config.llm.apiKey ? MASK : '' } });
-admin.get('/state', (req, res) => res.json({ config: publicCfg(), tiktok: tiktok.status, live: live.snapshot(), submissions: store.count(), voices: VOICE_CHOICES, ttsError: tts.lastError }));
+admin.get('/state', (req, res) => res.json({ config: publicCfg(), tiktok: tiktok.status, live: { ...live.snapshot(), queue: pubQueue(live.queue) }, submissions: store.count(), voices: VOICE_CHOICES, ttsError: tts.lastError }));
 admin.post('/config', (req, res) => {
   try {
     const next = req.body;
@@ -119,7 +122,7 @@ admin.post('/sim/comment', (req, res) => {
 });
 admin.post('/say', (req, res) => { live.sayNow(String(req.body.text || 'Hello my dears, I am Mystic Mira.').slice(0, 400)); res.json({ ok: true }); });
 admin.post('/test-llm', async (req, res) => {
-  try { const L = { ...config.llm, ...(req.body || {}) }; if (L.apiKey === MASK) L.apiKey = config.llm.apiKey; res.json({ ok: true, text: await llmReply(L, { nickname: 'Tester', comment: req.body.comment || 'Hi Mira, will I be lucky this year?' }) }); }
+  try { const L = { ...config.llm, ...(req.body || {}) }; if (L.apiKey === MASK) L.apiKey = config.llm.apiKey; res.json({ ok: true, text: await llmReply(L, { nickname: 'Tester', comment: req.body.comment || 'Hi Mira, will I be lucky this year?', liveReadings: !!live.readingsCfg.fromComments }) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 admin.post('/test-tts', async (req, res) => { const r = await tts.synth(req.body.text || 'Hello, I am Mystic Mira.'); res.json(r ? { ok: true, ...r } : { ok: false, error: tts.lastError || 'TTS disabled' }); });
@@ -144,7 +147,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
 const broadcast = (msg) => { const s = JSON.stringify(msg); wss.clients.forEach((c) => c.readyState === 1 && c.send(s)); };
-function statePayload() { return { type: 'state', overlay: config.overlay, voice: { browserLang: config.voice.browserLang, enabled: config.voice.enabled }, trigger: config.trigger, tiers: config.tiers, publicUrl: config.publicUrl, tiktok: tiktok.status, ...live.snapshot() }; }
+function statePayload() { return { type: 'state', overlay: config.overlay, voice: { browserLang: config.voice.browserLang, enabled: config.voice.enabled }, trigger: config.trigger, tiers: config.tiers, publicUrl: config.publicUrl, readings: live.readingsCfg, tiktok: tiktok.status, ...live.snapshot(), queue: pubQueue(live.queue) }; }
 function broadcastState() { broadcast(statePayload()); }
 wss.on('connection', (ws) => {
   send(ws, statePayload());
@@ -155,7 +158,8 @@ live.on('reveal', (item) => broadcast({ type: 'reveal', item }));
 live.on('say', (item) => broadcast({ type: 'say', item }));
 live.on('skip', (item) => broadcast({ type: 'skip', id: item.id }));
 live.on('chatQueue', (q) => broadcast({ type: 'chatQueue', chatQueue: q.map(({ id, nickname, comment }) => ({ id, nickname, comment })) }));
-live.on('queue', (queue) => broadcast({ type: 'queue', queue }));
+const pubQueue = (q) => q.map(({ reading, parsed, ...i }) => i);
+live.on('queue', (queue) => broadcast({ type: 'queue', queue: pubQueue(queue) }));
 live.on('idle', () => broadcast({ type: 'idle' }));
 live.on('toast', (t) => broadcast({ type: 'toast', ...t }));
 live.on('gift', (g) => broadcast({ type: 'gift', nickname: g.nickname, giftName: g.giftName, diamonds: g.diamonds }));

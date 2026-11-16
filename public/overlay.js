@@ -474,7 +474,12 @@
 
   function reveal(item) {
     clearLater(); logEv('reveal', { id: item.id, prophecy: !!item.prophecy });
-    panels({ hold: true });
+    // readings asked in the comments: show who asked, their date and question in the caption bubble
+    const cap = item.caption && cfg.overlay.showChat !== false ? item.caption : null;
+    if (cap) { $('cbAvatar').textContent = cap.icon || '🔮'; $('cbName').textContent = cap.title || ''; $('cbText').textContent = cap.text || ''; }
+    $('commentBubble').classList.toggle('isQuestion', !!cap);
+    const bubble = !!cap;
+    panels({ hold: true, bubble });
     const card = $('card'); card.classList.remove('flip');
     $('cardNum').textContent = item.keyNumbers[0].value; $('cardTitle').textContent = item.title;
     $('tierBadge').textContent = item.tierName; $('name').textContent = item.name; $('handle').textContent = '@' + item.nickname;
@@ -487,10 +492,10 @@
     Rig.gesture('think', { seconds: Math.max(2, (s.start ?? 3) - 0.3) });
     const ctl = playSpeech(s, startMs);
     ctl.ended.then(() => { if (curSpeech === ctl || !curSpeech) setTimeout(() => { if (!Lip.clock) Char.idle(); }, 700); });
-    later(600, () => panels({ top: true }));
+    later(600, () => panels({ top: true, bubble }));
     later(1300, () => card.classList.add('flip'));
     later(1900, () => document.querySelectorAll('#nums .num').forEach((n, i) => setTimeout(() => n.classList.add('on'), i * 220)));
-    later(Math.max(2200, startMs), () => { panels({ top: true, box: true }); subtitles(item.sentences, ctl, prefs.layout === 'landscape' ? 260 : 140); });
+    later(Math.max(2200, startMs), () => { panels({ top: true, box: true, bubble }); subtitles(item.sentences, ctl, prefs.layout === 'landscape' ? 260 : 140); });
     later((item.seconds || 20) * 1000, endShow);
   }
 
@@ -555,6 +560,10 @@
     $('cta').textContent = o.callToAction || '';
     const g = cfg.trigger || {};
     $('giftTxt').textContent = g.minDiamonds > 1 ? `a ${g.minDiamonds}-coin gift` : `1 ${g.giftName || 'gift'} ${/rose/i.test(g.giftName) ? '🌹' : '🎁'}`;
+    const R = cfg.readings || { fromComments: true };
+    $('stepsLive').classList.toggle('hidden', !R.fromComments); $('stepsForm').classList.toggle('hidden', !!R.fromComments);
+    $('giftLive').textContent = R.requireGift ? `send ${$('giftTxt').textContent} to unlock` : 'gifts jump the queue 🌹';
+    $('tiersRow').classList.toggle('hidden', !!R.fromComments && !R.requireGift);
     $('tiersRow').innerHTML = (cfg.tiers || []).map((t) => `<span>${t.minDiamonds} coin${t.minDiamonds > 1 ? 's' : ''}: ${esc(t.name)}</span>`).join('');
     Char.init(); Char.build();
   }

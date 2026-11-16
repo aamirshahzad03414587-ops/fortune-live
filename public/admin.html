@@ -52,11 +52,24 @@
     <label>Gift</label>
     <select id="sGift"><option value="Rose|1">Rose (1)</option><option value="Finger Heart|5">Finger Heart (5)</option><option value="Doughnut|30">Doughnut (30)</option><option value="Hand Hearts|100">Hand Hearts (100)</option><option value="Corgi|299">Corgi (299)</option></select>
     <button id="sGiftBtn">🎁 Send gift</button><button id="sChat">💬 Comment code</button><button id="sLike" class="alt">❤️ Likes</button><button id="sFollow" class="alt">➕ Follow</button><button id="sJoin" class="alt">👋 Join</button>
-    <button id="sDemo">▶ Run 3-viewer demo</button>
+    <button id="sDemo" class="alt">▶ Old code-form demo</button>
+    <label>Prediction comment (name + birth date + optional parents / question)</label>
+    <div class="row"><input id="sDate" value="Ayesha Khan 12/05/1998 mother Sara father Ali will I travel this year?"><button id="sDateBtn">🔮 Comment for a prediction</button></div>
+    <button id="sDateDemo">▶ Prediction demo (3 viewers commenting dates)</button>
     <label>Fake chat comment (Mira replies one by one)</label>
     <div class="row"><input id="sText" value="Hi Mira! Will I find love this year?"><button id="sSay">💬 Send comment</button></div>
     <label><input type="checkbox" id="sFollower" style="width:auto"> this viewer is a follower</label>
     <button id="sChatDemo" class="alt">▶ Chat demo (5 comments)</button>
+  </div>
+
+  <div class="box">
+    <h2>4b · Predictions from comments</h2>
+    <label><input type="checkbox" id="rFrom" style="width:auto"> Viewers get readings by commenting their name + birth date</label>
+    <label><input type="checkbox" id="rGift" style="width:auto"> Require a gift first (off = free for everyone)</label>
+    <label><input type="checkbox" id="rPrio" style="width:auto"> Gifters jump the queue (bigger gift = longer reading)</label>
+    <div class="row"><div><label>Readings per viewer per LIVE</label><input id="rPer" type="number" min="1"></div><div><label>Max free readings waiting</label><input id="rMax" type="number" min="1"></div><div><label>Tell people how to ask every (s, 0 = off)</label><input id="rHow" type="number" min="0"></div></div>
+    <label><input type="checkbox" id="rForm" style="width:auto"> Old private form + codes (link in bio)</label>
+    <small>Example comment: <i>Sara 12/05/1998 mother Hina father Ali will I travel?</i> Dates are read day/month/year (month/day when the second number is over 12).</small>
   </div>
 
   <div class="box">
@@ -137,6 +150,7 @@ function fill() {
   $('lUser').value = c.limits.readingsPerUserPerStream; $('lCode').value = c.limits.usesPerCode; $('lQueue').value = c.limits.maxQueueLength;
   $('lCredit').value = c.limits.giftCreditMinutes; $('lGap').value = c.limits.secondsBetweenReadings; $('dRet').value = c.data.retentionHours;
   $('cTiers').value = c.tiers.map(t => `${t.minDiamonds} | ${t.name} | ${t.level} | ${t.secondsOnScreen}`).join('\n');
+  const R = c.readings || {}; $('rFrom').checked = R.fromComments !== false; $('rGift').checked = !!R.requireGift; $('rPrio').checked = R.giftPriority !== false; $('rPer').value = R.perViewerPerStream || 1; $('rMax').value = R.maxQueue || 10; $('rHow').value = R.howToEverySeconds ?? 75; $('rForm').checked = !!R.privateForm;
   $('oTitle').value = c.overlay.title; $('raw').value = JSON.stringify(c, null, 2);
   const ch = c.chat; $('chEnabled').checked = ch.enabled; $('chMode').value = ch.mode; $('chMax').value = ch.maxQueue; $('chCool').value = ch.userCooldownSeconds;
   $('chAge').value = ch.maxCommentAgeSeconds; $('chIdle').value = ch.idlePromptSeconds; $('chGap').value = ch.secondsBetweenReplies; $('chGG').checked = ch.greetGifters; $('chGF').checked = ch.greetFollowers; $('chGJ').checked = ch.welcomeJoins !== false;
@@ -166,6 +180,11 @@ $('sChat').onclick = async () => { const r = await api('/sim/chat', { nickname: 
 $('sLike').onclick = () => api('/sim/like', { nickname: $('sNick').value, count: 15 });
 $('sFollow').onclick = () => api('/sim/follow', { nickname: $('sNick').value });
 $('sJoin').onclick = () => api('/sim/join', { nickname: $('sNick').value });
+$('sDateBtn').onclick = async () => { const r = await api('/sim/comment', { nickname: $('sNick').value, comment: $('sDate').value }); log(`🔮 ${$('sNick').value}: "${$('sDate').value}" → ${r.ok ? (r.item ? 'prediction queued: ' + r.item.name + ' (' + r.item.tierName + ')' : 'chat reply') : 'skipped (' + r.reason + ')'}`); };
+$('sDateDemo').onclick = async () => {
+  const list = [['Zainab_07', 'Zainab 3/7/2001 will I get married soon?'], ['omar.fq', 'my name is Omar, born 25 November 1991, should I start a business?'], ['Hira_x', 'Hira 14 March 1996 mother Nadia father Imran']];
+  for (const [n, t] of list) { const r = await api('/sim/comment', { nickname: n, comment: t }); log(`🔮 ${n}: "${t}" → ${r.ok ? 'queued #' + (r.item ? 'prediction' : 'reply') : 'skipped (' + r.reason + ')'}`); }
+};
 $('sDemo').onclick = async () => {
   const ppl = [['Ayesha Khan', '1998-07-23', 'Rose|1', 'Will I find love this year?'], ['Omar Farooq', '1991-11-29', 'Doughnut|30', 'Should I start a business?'], ['Bilal Ahmed', '1985-12-03', 'Hand Hearts|100', 'What about money in 2026?']];
   for (const [fullName, dob, g, question] of ppl) {
@@ -182,6 +201,7 @@ $('save').onclick = async () => {
   c.data.retentionHours = +$('dRet').value || 24;
   c.tiers = $('cTiers').value.split('\n').map(l => l.split('|').map(s => s.trim())).filter(p => p.length >= 4).map(([m, name, lv, sec]) => ({ minDiamonds: +m, name, level: Math.min(3, Math.max(1, +lv)), secondsOnScreen: +sec }));
   c.overlay.title = $('oTitle').value;
+  c.readings = { ...(c.readings || {}), fromComments: $('rFrom').checked, requireGift: $('rGift').checked, giftPriority: $('rPrio').checked, perViewerPerStream: +$('rPer').value || 1, maxQueue: +$('rMax').value || 10, howToEverySeconds: +$('rHow').value || 0, privateForm: $('rForm').checked };
   Object.assign(c.chat, { enabled: $('chEnabled').checked, mode: $('chMode').value, maxQueue: +$('chMax').value || 8, userCooldownSeconds: +$('chCool').value || 0, maxCommentAgeSeconds: +$('chAge').value || 90,
     idlePromptSeconds: +$('chIdle').value || 0, secondsBetweenReplies: +$('chGap').value || 0, greetGifters: $('chGG').checked, greetFollowers: $('chGF').checked, welcomeJoins: $('chGJ').checked, idlePrompts: $('chPrompts').value.split('\n').map(x => x.trim()).filter(Boolean) });
   Object.assign(c.voice, { enabled: $('vEnabled').checked, voice: $('vVoice').value, urduVoice: $('vUrdu').value, rate: $('vRate').value || '+0%', pitch: $('vPitch').value || '+0Hz' });

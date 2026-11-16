@@ -10,6 +10,8 @@ const DEFAULTS = {
   tiktok: { username: '', autoConnect: false },
   trigger: { giftName: 'Rose', minDiamonds: 1, acceptOtherGifts: true },
   tiers: [{ name: 'Short reading', minDiamonds: 1, level: 1, secondsOnScreen: 20 }],
+  // viewers comment "name + birth date (+ question)" on the LIVE; requireGift=false means free readings for everyone (1 per viewer)
+  readings: { fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true, freeTierName: 'Live prediction', freeSeconds: 18, howToEverySeconds: 75, privateForm: false },
   limits: { readingsPerUserPerStream: 1, usesPerCode: 1, maxQueueLength: 30, giftCreditMinutes: 10, secondsBetweenReadings: 3, maxSubmissionsPerIpPerHour: 10 },
   data: { retentionHours: 24, maxRetentionHoursIfUserOptsOut: 168 },
   overlay: {
