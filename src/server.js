@@ -11,7 +11,7 @@ import { PhoneBridge } from './bridge.js';
 import { computeReading, parseDate } from './numerology.js';
 import { diagRoute } from './diag.js';
 import { TTS, VOICE_CHOICES } from './tts.js';
-import { llmReply } from './chat.js';
+import { llmReply, spokenName } from './chat.js';
 
 let config = loadConfig();
 const store = new Store(process.env.DATA_FILE || path.join(ROOT, 'data', 'submissions.json'));
@@ -140,7 +140,7 @@ admin.post('/test-llm', async (req, res) => {
     for (const k of ['baseUrl', 'model', 'apiKey']) if (b[k]) L[k] = b[k];
     if (L.apiKey === MASK) L.apiKey = config.llm.apiKey;
     const nickname = String(b.nickname || 'Tester').slice(0, 40), comment = String(b.comment || 'Hi Mira, will I be lucky this year?').slice(0, 200);
-    const r = await live.ai.ask(L, { comment, name: nickname, cacheable: false },
+    const r = await live.ai.ask(L, { comment, name: spokenName(nickname), cacheable: false },
       () => llmReply(L, { nickname, comment, liveReadings: !!live.readingsCfg.fromComments }));
     res.json({ ok: true, text: r.text, ms: Date.now() - t, provider: L.provider || L.baseUrl, model: L.model });
   } catch (e) {

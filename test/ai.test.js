@@ -67,9 +67,9 @@ test('gate: one request at a time, minimum gap, cache re-personalised for the ne
   t += 10_000;
   await assert.rejects(g.ask(L, { comment: 'tell me a joke', name: 'Bo' }, async () => 'x'), (e) => e.refused);
   const r2 = await g.ask(L, { comment: 'what is the capital of japan', name: 'Sara', cacheable: true }, async () => { throw new Error('should be cached'); });
-  assert.deepEqual(r2, { text: 'Sara, tokyo shines like a lantern.', cached: true });
+  assert.deepEqual(r2, { text: 'Sara, Tokyo shines like a lantern.', cached: true });
   assert.equal(g.stats.cached, 1); assert.equal(g.stats.refused, 1);
-  assert.equal(withName('Ali', 'I see love'), 'Ali, I see love'); assert.equal(stripName('Ali', 'Ali, the stars'), 'The stars');
+  assert.equal(withName('Ali', 'I see love'), 'Ali, I see love'); assert.equal(withName('Ali', 'The stars smile'), 'Ali, the stars smile'); assert.equal(stripName('Ali', 'Ali, the stars'), 'The stars');
 });
 
 test('memory: facts, context for the AI, awaiting an answer, capped, cleared per stream', () => {

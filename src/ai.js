@@ -63,8 +63,9 @@ export function withName(name, text) {
   if (!name || new RegExp(esc(name), 'i').test(t.split(/\s+/).slice(0, 4).join(' '))) return t;
   // written in another script (Urdu, Hindi, Arabic ...): the model wrote their name its own way - leave it
   if (/^[^\p{Script=Latin}]*[\p{Script=Arabic}\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Thai}]/u.test(t)) return t;
-  const keep = /^(I|I'm|I'll|I've|I'd)\b/.test(t) || /^\p{Lu}{2}/u.test(t);
-  return `${name}, ${keep ? t : t.charAt(0).toLowerCase() + t.slice(1)}`;
+  // "The stars ..." -> "Ali, the stars ..."; names and places keep their capital ("Ali, Tokyo is ...")
+  const low = /^(the|your|you|you're|yes|no|my|a|an|this|that|it|it's|today|tonight|oh|ah|dear|hello|hi|hey|love|stars|well|sure|of|in|when|what|there|here|every|some|go|keep|try|trust|let|just|soon)\b/i.test(t);
+  return `${name}, ${low ? t.charAt(0).toLowerCase() + t.slice(1) : t}`;
 }
 
 // ---------------------------------------------------------------- per-viewer memory
