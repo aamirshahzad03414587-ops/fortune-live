@@ -146,6 +146,10 @@ Gift streaks are added up: 30 Roses in a streak count as 30 coins and unlock the
 
 ---
 
+### Phone layout (9:16, default)
+
+The overlay is 1080 wide and at least 1920 tall (9:16). On taller screens such as an iPhone (about 19.5:9) it grows taller instead of showing black bars. Every box sits in the part of the screen that TikTok's own buttons don't cover: below the top bar (top ~10%), above the comments, joins and gift bar (bottom ~36%), and away from the like/share buttons (right ~12%). The title, the how-to box, the viewer's question and the reading card are near the top, and Mira sits right under them. `node tools/layout-check.mjs` takes screenshots with a mock TikTok UI on top, reports any overlap and writes `screenshots/layout-9x16.png`.
+
 ## Mira: animation, voice and chat
 
 ### How she is animated (files in `public/assets/`)

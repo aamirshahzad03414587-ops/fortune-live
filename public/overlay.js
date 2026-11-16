@@ -11,7 +11,7 @@
   const performance = renderMode ? { now: () => VT.now } : window.performance;
   const LS = (k, v) => (v === undefined ? localStorage.getItem('fl_' + k) : localStorage.setItem('fl_' + k, v));
   const prefs = {
-    layout: qs.get('layout') || LS('layout') || 'vertical',
+    layout: qs.get('layout') || LS('layout') || 'vertical', // 9:16 by default
     audio: qs.has('audio') ? qs.get('audio') !== '0' : LS('audio') !== '0',
     chime: qs.has('chime') ? qs.get('chime') !== '0' : LS('chime') !== '0',
     queue: LS('queue') !== null ? LS('queue') === '1' : null,
@@ -25,7 +25,12 @@
   // ------------------------------------------------------------ layout & scaling
   function applyLayout() {
     root.className = prefs.layout === 'landscape' ? 'landscape' : 'vertical';
-    const W = prefs.layout === 'landscape' ? 1920 : 1080, H = prefs.layout === 'landscape' ? 1080 : 1920;
+    // vertical: 1080 wide, at least 1920 tall (9:16). On taller screens (iPhone ~19.5:9) the canvas grows taller instead of
+    // letterboxing, and every box is placed by the TikTok safe zones (fractions of --H), so nothing hides under TikTok's own UI.
+    const vert = prefs.layout !== 'landscape';
+    const W = vert ? 1080 : 1920;
+    const H = vert ? Math.round(Math.min(2400, Math.max(1920, (1080 * innerHeight) / Math.max(1, innerWidth)))) : 1080;
+    root.style.height = H + 'px'; root.style.setProperty('--H', H + 'px');
     const s = Math.min(innerWidth / W, innerHeight / H);
     root.style.transform = `translate(${(innerWidth - W * s) / 2}px, ${(innerHeight - H * s) / 2}px) scale(${s})`;
     layoutChar();

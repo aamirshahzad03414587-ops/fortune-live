@@ -3,14 +3,19 @@
 html, body { margin:0; height:100%; overflow:hidden; background: transparent; }
 body { font-family: 'Quicksand', 'Segoe UI', sans-serif; color: var(--ink); }
 #root { position:absolute; left:0; top:0; transform-origin: 0 0; overflow:hidden; background:#140a1e; }
-#root.vertical { width:1080px; height:1920px; }
+#root.vertical { width:1080px; height:var(--H, 1920px);
+  /* TikTok phone UI: top bar ~10.5% (host badge, viewers), bottom ~36% (comments, joins, gift bar), right ~12% (like/share).
+     All vertical boxes sit in the free band between them: from --safeTop down to --safeBottom, x 44..(1080-140). */
+  --safeTop: calc(var(--H, 1920px) * 0.105); --safeBottom: calc(var(--H, 1920px) * 0.62);
+  --y0: calc(var(--safeTop) + 104px); --padL: 44px; --padR: 140px; }
 #root.landscape { width:1920px; height:1080px; }
 
 /* ---------- scene ---------- */
 #bgBlur { position:absolute; inset:-60px; background-size:cover; background-position:center; filter: blur(40px) brightness(.5) saturate(1.2); display:none; }
-.landscape #bgBlur { display:block; }
+.landscape #bgBlur, .vertical #bgBlur { display:block; }
 #stage { position:absolute; overflow:hidden; background:#140a1e; }
-.vertical #stage { left:0; top:0; width:1080px; height:1920px; }
+.vertical #stage { left:0; top:calc(var(--y0) + 110px); width:1080px; height:1920px;   /* her hair starts just under the boxes */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 9%); mask-image: linear-gradient(180deg, transparent 0, #000 9%); }
 .landscape #stage { left:70px; top:0; width:607.5px; height:1080px; box-shadow: 0 0 80px 20px rgba(130,70,255,.3);
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 5%, #000 95%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 5%, #000 95%, transparent 100%); }
 .layer { position:absolute; inset:0; width:100%; height:100%; }
@@ -65,14 +70,16 @@ body { font-family: 'Quicksand', 'Segoe UI', sans-serif; color: var(--ink); }
 section, aside { transition: opacity .5s, transform .5s; }
 
 #titleBar { position:absolute; text-align:center; }
-.vertical #titleBar { left:30px; right:30px; top:16px; }
+.vertical #titleBar { left:var(--padL); right:var(--padR); top:var(--safeTop); }
+.vertical #title { font-size:42px; }
+.vertical #cta { font-size:24px; }
 .landscape #titleBar { left:740px; right:60px; top:26px; }
 #title { font-family:'Cinzel Decorative', Georgia, serif; font-size:48px; color:var(--gold); text-shadow: 0 0 16px rgba(255,200,120,.8), 0 3px 0 #5a2d00, 0 0 4px #000; }
 #cta { margin-top:2px; font-size:25px; font-weight:700; color:#fff; text-shadow:0 2px 8px #000, 0 0 3px #000; }
 
 /* viewer comment bubble: top strip, above her hair */
 #commentBubble { position:absolute; display:flex; gap:18px; align-items:center; padding:14px 22px; }
-.vertical #commentBubble { left:40px; right:40px; top:126px; height:128px; }
+.vertical #commentBubble { left:var(--padL); right:var(--padR); top:var(--y0); height:112px; padding:10px 20px; }
 .landscape #commentBubble { left:740px; right:60px; top:130px; height:130px; }
 .cbAvatar { flex:none; width:72px; height:72px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:34px; color:#2a0f4a; background: linear-gradient(135deg,var(--gold),#ffb3e6); }
 .cbBody { min-width:0; }
@@ -81,7 +88,10 @@ section, aside { transition: opacity .5s, transform .5s; }
 
 /* reading: bottom area, below her hands, away from face and skull */
 #revealTop { position:absolute; display:flex; gap:26px; align-items:center; padding:18px 28px; }
-.vertical #revealTop { left:30px; right:30px; top:1440px; height:236px; }
+.vertical #revealTop { left:var(--padL); right:var(--padR); top:calc(var(--y0) + 122px); height:206px; padding:12px 22px; gap:20px; }
+.vertical #cardWrap { width:118px; height:176px; }
+.vertical #name { font-size:46px; }
+.vertical .num { width:92px; } .vertical .num b { width:60px; height:60px; font-size:30px; }
 .landscape #revealTop { left:740px; right:60px; top:280px; height:290px; }
 #cardWrap { perspective: 1200px; width:136px; height:200px; flex:none; }
 .landscape #cardWrap { width:160px; height:240px; }
@@ -105,8 +115,9 @@ section, aside { transition: opacity .5s, transform .5s; }
 .num span { display:block; font-size:16px; margin-top:4px; color:#eadfff; }
 
 #readingBox { position:absolute; padding:16px 30px 22px; }
-.vertical #readingBox { left:30px; right:30px; top:1690px; height:190px; }
-.vertical #readingBox.solo { top:1560px; height:320px; }
+.vertical #readingBox { left:var(--padL); right:var(--padR); top:calc(var(--y0) + 338px); height:184px; padding:10px 24px 18px; }
+.vertical #readingBox.solo { top:calc(var(--y0) + 122px); height:240px; }
+.vertical #readingText { font-size:28px; }
 .landscape #readingBox { left:740px; right:60px; top:590px; height:340px; }
 .landscape #readingBox.solo { top:290px; height:520px; }
 .speaker { font-size:20px; font-weight:800; color:var(--gold); letter-spacing:1px; margin-bottom:2px; }
@@ -119,7 +130,10 @@ section, aside { transition: opacity .5s, transform .5s; }
 #progress div { height:100%; width:0; background: linear-gradient(90deg,var(--violet),var(--gold)); }
 
 #idleBox { position:absolute; padding:20px 34px; }
-.vertical #idleBox { left:30px; right:30px; top:1530px; height:345px; }
+.vertical #idleBox { left:var(--padL); right:var(--padR); top:var(--y0); height:290px; padding:14px 26px; }
+.vertical .howTitle { font-size:30px; }
+.vertical .steps { font-size:25px; margin:8px 0 4px; }
+.vertical .steps b { width:38px; height:38px; }
 .landscape #idleBox { left:740px; right:60px; top:560px; height:360px; }
 .howTitle { font-family:'Cinzel Decorative', Georgia, serif; color:var(--gold); font-size:34px; text-align:center; }
 .steps { list-style:none; padding:0; margin:12px 0 8px; font-size:28px; }
@@ -130,7 +144,7 @@ section, aside { transition: opacity .5s, transform .5s; }
 #tiersRow span { padding:5px 12px; border-radius:999px; border:1px solid rgba(244,210,122,.7); background:rgba(0,0,0,.25); }
 
 #queueBox { position:absolute; padding:14px 18px; }
-.vertical #queueBox { left:22px; top:290px; width:300px; }
+.vertical #queueBox { left:22px; top:calc(var(--y0) + 520px); width:250px; padding:10px 14px; }
 .landscape #queueBox { left:740px; right:60px; top:945px; display:flex; align-items:center; gap:16px; padding:10px 20px; }
 .qTitle { font-weight:700; color:var(--gold); font-size:22px; margin-bottom:4px; white-space:nowrap; }
 #queueList { list-style:none; margin:0; padding:0; font-size:22px; }
@@ -143,18 +157,20 @@ section, aside { transition: opacity .5s, transform .5s; }
 @keyframes slideIn { from { opacity:0; transform: translateX(-20px);} to { opacity:1; transform:none; } }
 
 #toasts { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:8px; pointer-events:none; }
-.vertical #toasts { left:24px; width:440px; top:640px; }
+.vertical #toasts { left:24px; width:400px; top:calc(var(--y0) + 760px); }
 .landscape #toasts { left:90px; width:560px; top:860px; align-items:center; flex-direction:column-reverse; }
 .toast { font-size:22px; font-weight:700; padding:8px 18px; border-radius:18px; background: rgba(24,8,36,.86); border:1.5px solid var(--gold); box-shadow:0 0 14px rgba(160,100,255,.5); animation: toastIn .4s ease-out, toastOut .5s ease-in forwards; animation-delay: 0s, var(--life, 4.5s); max-width:100%; }
 .toast.warn { border-color:#ff9a9a; } .toast.hint { border-color:#9ad7ff; }
 @keyframes toastIn { from { opacity:0; transform: translateX(-12px) scale(.95); } }
 @keyframes toastOut { to { opacity:0; transform: translateY(-8px); } }
 #hearts { position:absolute; right:30px; bottom:420px; width:180px; height:600px; pointer-events:none; }
+.vertical #hearts { right:150px; bottom:calc(var(--H, 1920px) * 0.40); }
 .landscape #hearts { right:40px; bottom:120px; }
 .heart { position:absolute; bottom:0; font-size:40px; animation: rise 2.6s ease-out forwards; }
 @keyframes rise { 0% { opacity:0; transform: translate(0,0) scale(.5);} 15% { opacity:1; } 100% { opacity:0; transform: translate(var(--dx,0px), -520px) scale(1.2);} }
 #footer { position:absolute; left:0; right:0; bottom:10px; text-align:center; font-size:19px; color:rgba(255,255,255,.85); text-shadow:0 1px 4px #000, 0 0 2px #000; }
 .landscape #footer { left:740px; right:60px; bottom:12px; }
+.vertical #footer { left:var(--padL); right:var(--padR); bottom:auto; top:calc(var(--safeBottom) - 34px); font-size:17px; }
 #soundChip { position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); z-index:60; padding:28px 40px; font-size:44px; box-shadow:0 10px 40px rgba(0,0,0,.5); text-align:center; font-weight:700; border-radius:14px; background:#f4d27a; color:#2a0f4a; cursor:pointer; }
 
 #panel { position:absolute; left:40px; top:40px; z-index:50; width:560px; padding:24px; font-size:24px; background:rgba(15,5,25,.96); border:2px solid var(--gold); border-radius:20px; }
