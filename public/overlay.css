@@ -208,3 +208,4 @@ section, aside { transition: opacity .5s, transform .5s; }
 /* disclaimer: tiny vertical line on the right edge, never across her */
 .vertical #footer { left:auto; right:124px; bottom:auto; top:calc(var(--u) * 90.5); width:0; height:0; font-size:15px; white-space:nowrap; transform:rotate(-90deg); transform-origin:0 0; text-align:left; opacity:.75; }
 #revQ { display:none; font-size:30px; font-weight:700; color:var(--gold); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+.lite #bgBlur { filter: brightness(.5); }   /* lite: no full-screen blur */

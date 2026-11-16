@@ -60,6 +60,15 @@ An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime for
 ### TikTok LIVE Studio
 Add a source → **Link / Browser source** (the name varies by version) → paste the overlay URL and set the size to **1080 × 1920**. If your LIVE Studio version has no browser source, stream from OBS instead (window capture or virtual camera). Go live only from LIVE Studio — don't stream to TikTok with a stream key from another tool.
 
+#### If the overlay goes black or reloads in LIVE Studio
+Use **`https://your-app.onrender.com/overlay?primary=1`** (no key needed) as the Link / Browser source, at 1080 × 1920.
+* `primary=1` makes this window Mira's only voice. If the overlay is also open somewhere else, such as a phone preview or a second tab, that copy stays silent but still animates. Without `primary=1`, a desktop window takes priority over a phone, and the window opened first wins.
+* `lite=1` gives a lighter version: Mira at about 60 % resolution, 24 fps, 1024 px textures, no sparkles or smoke, and a plain background. Phones, devices that report 4 GB of memory or less, and any browser that had a WebGL reset in the last 24 hours switch to it automatically. Use `lite=0` to force full quality.
+* The rig draws at most 30 fps (`fps=` to change it) and never at more pixels than her painting has (941 × 1672).
+* If the GPU resets, Mira's still picture shows at once and the rig rebuilds itself when the browser restores WebGL. If WebGL doesn't come back within 4 s, the overlay stays on the still picture instead of going black.
+* The page never reloads itself. If it still reloads, it's LIVE Studio restarting a crashed browser source, so try `lite=1`.
+* Check it with `npm run soak` (`tools/soak.mjs`: 15 min of simulated LIVE events while it logs memory, GPU process size, blobs, sockets, context losses and reloads).
+
 ### Direct mode: read the LIVE from the server (no TikFinity, works from a phone)
 
 Set `TIKTOK_USERNAME` (Render → Environment) or type the username in **1 · LIVE events** in the control panel, then pick **Direct**. The server:

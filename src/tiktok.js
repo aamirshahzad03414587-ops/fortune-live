@@ -50,15 +50,15 @@ export class TikTokBridge extends EventEmitter {
 
   /** Status reported by the overlay's TikFinity client (kept for compatibility: setStatus(state, message, extra)). */
   setStatus(state, message = '', extra = {}) {
+    const changed = state !== this.tikfinity.state || message !== this.tikfinity.message;
     this.tikfinity = { state, message };
     if (extra.username) this.tfUser = extra.username;
-    this.publish();
+    if (changed) this.publish();   // overlays retry TikFinity every few seconds; don't re-broadcast an unchanged status
   }
   setDirect(state, message = '') {
     const changed = state !== this.direct.state || message !== this.direct.message;
     this.direct = { state, message, at: new Date(this.now()).toISOString() };
-    if (changed) this.log(`direct @${this.username}: ${state}${message ? ' - ' + message : ''}`);
-    this.publish();
+    if (changed) { this.log(`direct @${this.username}: ${state}${message ? ' - ' + message : ''}`); this.publish(); }
   }
 
   // ------------------------------------------------------------------ direct connection

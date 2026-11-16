@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/server.js",
     "simulate": "node src/simulate.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "soak": "node tools/soak.mjs"
   },
   "license": "UNLICENSED",
   "type": "module",

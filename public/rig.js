@@ -75,32 +75,49 @@
     for (const m of rig.mouthShapes) jobs.push(loadImg(`${base}face/mouth-${m}.png`).then((i) => (imgs['mouth-' + m] = i)));
     await Promise.all(jobs);
 
-    const canvas = document.createElement('canvas'); canvas.className = 'layer rigCanvas';
-    const gl = canvas.getContext('webgl', { premultipliedAlpha: false, alpha: false, antialias: false, preserveDrawingBuffer: !!opts.preserve }) || canvas.getContext('experimental-webgl');
-    if (!gl) throw new Error('WebGL not available');
-    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-    const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
-    gl.useProgram(prog);
-    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const U = {}; for (const n of ['uOrig', 'uAlpha', 'uBg', 'uW', 'uPatch', 'uSize', 'uFace', 'uNeck', 'uHips', 'uBall', 'uRoll', 'uSway', 'uBreath', 'uYaw', 'uPitch', 'uJaw', 'uBrow', 'uFringe', 'uHeadT', 'uHair']) U[n] = gl.getUniformLocation(prog, n);
-    const tex = (unit, src) => {
-      const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); return t;
+    // Textures are capped (2048, or 1024 in lite mode) so a weak GPU / LIVE Studio's browser source never gets huge uploads.
+    const maxTex = opts.maxTex || 2048;
+    const fit = (im) => {
+      const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height, k = Math.min(1, maxTex / Math.max(w, h));
+      if (k >= 1) return im;
+      const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); return c;
     };
-    tex(0, imgs.orig); tex(1, imgs.alpha); tex(2, imgs.bg); tex(3, imgs.w);
+    const texSrc = { orig: fit(imgs.orig), alpha: fit(imgs.alpha), bg: fit(imgs.bg), w: fit(imgs.w) };
+    const canvas = document.createElement('canvas'); canvas.className = 'layer rigCanvas';
     const [fx0, fy0, fx1, fy1] = rig.face;
     const face = document.createElement('canvas'); face.width = fx1 - fx0; face.height = fy1 - fy0;
     const fc = face.getContext('2d');
     const tmp = document.createElement('canvas'); const tc = tmp.getContext('2d');
-    const patchTex = tex(4, face);
-    gl.uniform1i(U.uOrig, 0); gl.uniform1i(U.uAlpha, 1); gl.uniform1i(U.uBg, 2); gl.uniform1i(U.uW, 3); gl.uniform1i(U.uPatch, 4);
-    gl.uniform2f(U.uSize, rig.width, rig.height); gl.uniform4f(U.uFace, fx0, fy0, fx1 - fx0, fy1 - fy0);
-    gl.uniform2f(U.uNeck, ...rig.pivots.neck); gl.uniform2f(U.uHips, ...rig.pivots.hips); gl.uniform3f(U.uBall, ...rig.ball);
+    let gl = null, U = {}, patchTex = null;
+    // All GPU state is built here, so it can be rebuilt after a WebGL context loss (GPU reset, driver hiccup, memory pressure).
+    function setupGL() {
+      gl = canvas.getContext('webgl', { premultipliedAlpha: false, alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power', preserveDrawingBuffer: !!opts.preserve }) || canvas.getContext('experimental-webgl');
+      if (!gl) throw new Error('WebGL not available');
+      if (!texSrc.alpha) throw new Error('layers released (lite mode)');
+      const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS) && !gl.isContextLost()) throw new Error(gl.getShaderInfoLog(s)); return s; };
+      const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS) && !gl.isContextLost()) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      U = {}; for (const n of ['uOrig', 'uAlpha', 'uBg', 'uW', 'uPatch', 'uSize', 'uFace', 'uNeck', 'uHips', 'uBall', 'uRoll', 'uSway', 'uBreath', 'uYaw', 'uPitch', 'uJaw', 'uBrow', 'uFringe', 'uHeadT', 'uHair']) U[n] = gl.getUniformLocation(prog, n);
+      const tex = (unit, src) => {
+        const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); return t;
+      };
+      tex(0, texSrc.orig); tex(1, texSrc.alpha); tex(2, texSrc.bg); tex(3, texSrc.w);
+      patchTex = tex(4, face);
+      gl.uniform1i(U.uOrig, 0); gl.uniform1i(U.uAlpha, 1); gl.uniform1i(U.uBg, 2); gl.uniform1i(U.uW, 3); gl.uniform1i(U.uPatch, 4);
+      gl.uniform2f(U.uSize, rig.width, rig.height); gl.uniform4f(U.uFace, fx0, fy0, fx1 - fx0, fy1 - fy0);
+      gl.uniform2f(U.uNeck, ...rig.pivots.neck); gl.uniform2f(U.uHips, ...rig.pivots.hips); gl.uniform3f(U.uBall, ...rig.ball);
+    }
+    setupGL();
+    // lean (lite) mode: the full-size layer pictures are on the GPU now, so let the page drop its copies (phones have little
+    // memory; iOS Safari kills the tab around 300-400 MB). A context loss then falls back to the still picture instead.
+    if (opts.lean) { texSrc.alpha = texSrc.bg = texSrc.w = null; imgs.alpha = imgs.bg = imgs.w = null; }
 
     // ---------------------------------------------------------------- animation state
     const R = rng(opts.seed || 7);
@@ -236,6 +253,7 @@
     }
 
     function render() {
+      if (api.lost || !gl || gl.isContextLost()) return;
       drawFace();
       gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, patchTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, face);
@@ -248,7 +266,13 @@
 
     const api = {
       canvas, rig, state: S, gesture,
-      resize(w, h) { const d = Math.min(2, opts.dpr || window.devicePixelRatio || 1); canvas.width = Math.max(2, Math.round(w * d)); canvas.height = Math.max(2, Math.round(h * d)); },
+      /** Backing size: never more pixels than her painting has (941x1672); the browser scales the canvas up for free.
+       *  (It used to be CSS size x devicePixelRatio: about 2100x3700 in a 1080x1920 LIVE Studio source at 150% Windows scaling,
+       *  ~8 million shaded pixels with 9 texture reads each, 60+ times a second.) opts.scale < 1 makes it lighter still. */
+      resize(w, h) {
+        const d = Math.min(2, opts.dpr || window.devicePixelRatio || 1), k = Math.min(1, (rig.width * (opts.scale || 1)) / Math.max(1, w * d));
+        canvas.width = Math.max(2, Math.round(w * d * k)); canvas.height = Math.max(2, Math.round(h * d * k));
+      },
       /** nowMs: page clock; inp: { speaking, shape: 'rest'|'small'|'E'|'A'|'O'|'U', open: 0..1, mood: 'neutral'|'happy'|'prophecy' } */
       frame(nowMs, inp = {}) {
         const dt = S.last == null ? 1 / 60 : clamp((nowMs - S.last) / 1000, 0, 0.1); S.last = nowMs;
@@ -257,9 +281,17 @@
         render();
       },
       get mouthOpen() { return S.open; },
-      destroy() { canvas.remove(); },
+      /** Frees the GPU memory right away (instead of waiting for garbage collection) and removes the canvas. */
+      destroy() { api.dead = true; try { const x = gl && gl.getExtension('WEBGL_lose_context'); x && x.loseContext(); } catch {} canvas.remove(); },
+      lost: false,
     };
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); api.lost = true; opts.onLost && opts.onLost(); });
+    // Context loss: keep the page alive (preventDefault lets the browser restore it), rebuild everything on restore.
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); if (api.dead) return; api.lost = true; opts.onLost && opts.onLost(); }, false);
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (api.dead) return;
+      try { setupGL(); api.lost = false; opts.onRestored && opts.onRestored(); }
+      catch (e) { opts.onRestoreFailed && opts.onRestoreFailed(e); }
+    }, false);
     container.appendChild(canvas);
     return api;
   }

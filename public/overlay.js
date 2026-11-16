@@ -16,9 +16,21 @@
     chime: qs.has('chime') ? qs.get('chime') !== '0' : LS('chime') !== '0',
     queue: LS('queue') !== null ? LS('queue') === '1' : null,
   };
+  // ------------------------------------------------------------ lite mode (weak GPUs, phones, after a GPU reset)
+  // ?lite=1 forces it, ?lite=0 turns it off. Auto: phones / tablets, devices reporting <= 4 GB memory, or a WebGL
+  // context loss in the last 24 h on this browser. Lite = lower-resolution rig, 24 fps, 1024 px textures, no sparkles,
+  // no smoke and a plain (unblurred) background.
+  const lite = (() => {
+    if (qs.has('lite')) return qs.get('lite') !== '0';
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+    const lowMem = typeof navigator.deviceMemory === 'number' && navigator.deviceMemory <= 4;
+    const lostAt = Number(LS('glLostAt') || 0), recentLoss = lostAt && Date.now() - lostAt < 24 * 3600e3;
+    return !!(mobile || lowMem || recentLoss);
+  })();
+  const FPS = Number(qs.get('fps')) || (lite ? 24 : 30);   // the rig and effects never draw faster than this
   let cfg = { overlay: { character: {} }, trigger: { giftName: 'Rose', minDiamonds: 1 }, tiers: [], voice: {} };
   const events = (window.__events = []);
-  const logEv = (e, extra = {}) => events.push({ t: Math.round(performance.now()), e, ...extra });
+  const logEv = (e, extra = {}) => { events.push({ t: Math.round(performance.now()), e, ...extra }); if (events.length > 600) events.splice(0, events.length - 400); };  // capped (it grew forever)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -84,7 +96,7 @@
     },
     /** Picks the 720p file when the overlay is drawn small (landscape, small browser sources). */
     videoSrc() {
-      const v = this.c.video, q = qs.get('quality') || v.quality;
+      const v = this.c.video, q = qs.get('quality') || (lite ? '720' : v.quality);   // lite: never the 1080p file
       if (q === '720' && v.src720) return v.src720;
       if (q === '1080' || !v.src720) return v.src;
       const px = $('stage').getBoundingClientRect().width * (window.devicePixelRatio || 1);
@@ -118,13 +130,33 @@
       this.kind = 'rig'; Vid.on = false;
       still.src = r.image; bodyImg.removeAttribute('src'); $('bgBlur').style.backgroundImage = `url("${r.image}")`;
       this.aspect = DEFAULT_CHAR.width / DEFAULT_CHAR.height;
+      vid.pause(); vid.removeAttribute('src');   // no background video under the rig
       Rig.api = await MiraRig.create(charBox, { base: r.base, image: r.image, preserve: renderMode, seed: 11,
-        onLost: () => { logEv('rig-lost'); Rig.api = null; root.classList.remove('rigMode'); this.inited = false; this.init(); } });
+        scale: lite ? 0.6 : 1, maxTex: lite ? 1024 : 2048, dpr: lite ? 1 : undefined, lean: lite,
+        // GPU reset: show her still picture at once (never a black box), wait for the browser to restore the context,
+        // rebuild the rig; if it doesn't come back in 4 s, stay on the still picture and remember to use lite mode.
+        onLost: () => {
+          logEv('rig-lost'); Rig.lost = (Rig.lost || 0) + 1; LS('glLostAt', String(Date.now()));
+          root.classList.remove('rigMode'); Rig.paused = true;
+          clearTimeout(Rig.lostTimer); Rig.lostTimer = setTimeout(() => this.rigFallback('not restored'), 4000);
+        },
+        onRestored: () => {
+          clearTimeout(Rig.lostTimer); logEv('rig-restored');
+          if (Rig.lost >= 3) return this.rigFallback('lost 3 times');
+          Rig.paused = false; root.classList.add('rigMode'); layoutChar();
+        },
+        onRestoreFailed: (e) => this.rigFallback(String(e && e.message || e)) });
       charBox.insertBefore(Rig.api.canvas, $('warm'));
       root.classList.add('rigMode');
       layoutChar(); this.build();
       this.mouthOk = false; mouthEl.hidden = true;
       this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'rig' });
+    },
+    /** Give up on WebGL for this page: free the GPU, keep her still picture (with breathing and the audio-driven mouth). */
+    rigFallback(why) {
+      clearTimeout(Rig.lostTimer); logEv('rig-fallback', { why });
+      if (Rig.api) { Rig.api.destroy(); Rig.api = null; }
+      Rig.paused = false; root.classList.remove('rigMode'); this.initStill();
     },
     initStill() {
       const c = this.c; this.kind = 'still'; Vid.on = false; root.classList.remove('videoMode'); vid.removeAttribute('src'); vid.classList.remove('on');
@@ -216,9 +248,13 @@
     const st = $('stage'), W = st.clientWidth, H = st.clientHeight, a = Char.aspect || DEFAULT_CHAR.width / DEFAULT_CHAR.height;
     let w = W, h = W / a; if (h < H) { h = H; w = H * a; }
     Object.assign(charBox.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
-    for (const c of [scene, mist]) { c.width = Math.round(w); c.height = Math.round(h); }
+    // effect canvases: no bigger than her painting (they were the full 1404x2495 box, redrawn every frame)
+    const ek = Math.min(1, (DEFAULT_CHAR.width * (lite ? 0.6 : 1)) / Math.max(1, w));
+    for (const c of [scene, mist]) { const cw = Math.round(w * ek), ch = Math.round(h * ek); if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; } }
     if (Rig.api) Rig.api.resize(w, h);
-    sp.width = W; sp.height = H;
+    // sparkles are off in lite mode: keep that full-stage canvas at 1x1 instead of ~1080x2340 (10 MB on an iPhone)
+    const sw = lite ? 1 : W, sh = lite ? 1 : H;
+    if (sp.width !== sw || sp.height !== sh) { sp.width = sw; sp.height = sh; }
     if (Vid.on) applyTrack();
   }
 
@@ -250,15 +286,21 @@
   };
   /** Lip-sync state: a viseme track and a clock (seconds into the speech audio, or null when not speaking). */
   const Lip = { track: null, clock: null, source: 'none' };
+  let decoder = null;
+  /** The speech blob URL currently on the shared <audio>; revoked as soon as another one replaces it (they used to pile up). */
+  function setAudioSrc(el, src) {
+    if (SharedAudio.blob && SharedAudio.blob !== src) { try { URL.revokeObjectURL(SharedAudio.blob); } catch {} SharedAudio.blob = null; }
+    el.src = src; if (src.startsWith('blob:')) SharedAudio.blob = src;
+  }
   async function loadTrack(url) {
     const res = await fetch(url); if (!res.ok) throw new Error('HTTP ' + res.status);
     const bytes = await res.arrayBuffer();
-    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+    // one decoder for the whole session (no new audio context per line)
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const ctx = new OAC(1, 1, 24000);
-    const buf = await ctx.decodeAudioData(bytes.slice(0));
+    decoder = decoder || new OAC(1, 1, 24000);
+    const buf = await decoder.decodeAudioData(bytes.slice(0));
     const track = LipSync.analyze(buf.getChannelData(0), buf.sampleRate);
-    return { track, blobUrl };
+    return { track, bytes };
   }
 
   // ------------------------------------------------------------ the animation frame (also callable with a virtual clock)
@@ -276,7 +318,7 @@
     const lt = Lip.clock ? Lip.clock() : null;
     Mouth.set(lt == null ? 0 : LipSync.at(Lip.track, lt + (c.mouth.leadMs ?? 30) / 1000));
     Mouth.step(dt, lt != null);
-    if (Rig.api) {
+    if (Rig.api && !Rig.paused) {
       const sh = lt == null ? null : LipSync.shapeAt(Lip.track, lt + (c.mouth.leadMs ?? 30) / 1000);
       Rig.api.frame(now, { speaking: lt != null, shape: sh ? sh.shape : 'rest', open: sh ? sh.open : 0, mood: Char.mode === 'prophecy' ? 'prophecy' : 'neutral' });
       if (window.__rigLog) window.__rigLog.push({ t: lt, shape: sh && sh.shape, eye: Rig.api.state.eye });
@@ -317,7 +359,7 @@
         sc.restore();
       }
       // incense smoke
-      for (const p of c.incense || []) if (Math.random() < 0.22 * k) smoke.push({ x: (p.x / 100) * W, y: (p.y / 100) * H, vx: (Math.random() - 0.5) * 0.1, vy: -(0.32 + Math.random() * 0.22), r: W * 0.006, life: 1, sw: Math.random() * 6.28 });
+      if (!lite) for (const p of c.incense || []) if (Math.random() < 0.22 * k) smoke.push({ x: (p.x / 100) * W, y: (p.y / 100) * H, vx: (Math.random() - 0.5) * 0.1, vy: -(0.32 + Math.random() * 0.22), r: W * 0.006, life: 1, sw: Math.random() * 6.28 });
       smoke = smoke.filter((p) => p.life > 0);
       for (const p of smoke) {
         p.sw += 0.025 * k; p.x += (p.vx + Math.sin(p.sw) * 0.22) * k * (W / 941); p.y += p.vy * k * (W / 941); p.r *= 1 + 0.007 * k; p.life -= 0.0042 * k;
@@ -344,7 +386,7 @@
     // sparkles over the whole stage
     const w = sp.width, h = sp.height;
     spx.clearRect(0, 0, w, h);
-    if (cfg.overlay.effects?.sparkles !== false) {
+    if (cfg.overlay.effects?.sparkles !== false && !lite) {
       const want = cfg.overlay.effects?.sparkleCount ?? 28;
       while (parts.length < want) parts.push({ x: Math.random() * w, y: h * (0.1 + Math.random() * 0.85), vx: (Math.random() - 0.5) * 0.25, vy: -Math.random() * 0.35 - 0.08, r: Math.random() * 1.8 + 0.5, life: 1, decay: 0.0025 + Math.random() * 0.004, hue: Math.random() < 0.5 ? 45 : 285 });
       if (boost > 0) { boost--; parts.push({ x: w * (0.15 + Math.random() * 0.7), y: h * (0.5 + Math.random() * 0.4), vx: (Math.random() - 0.5) * 1.2, vy: -Math.random() * 1.6 - 0.4, r: Math.random() * 2.4 + 1, life: 1, decay: 0.01, hue: 285 }); }
@@ -360,7 +402,15 @@
     }
     if (Lip.clock && window.__lipLog) window.__lipLog.push({ t: lt, v: Mouth.target, f: Vid.idx });
   }
-  function tick() { if (!renderMode) frame(performance.now()); requestAnimationFrame(tick); }
+  // Capped at FPS (30, or 24 in lite mode): screens and LIVE Studio often run rAF at 60-144 Hz, which only burns GPU time.
+  let lastDraw = 0;
+  function tick(now) {
+    requestAnimationFrame(tick);
+    if (renderMode || document.hidden) return;
+    now = performance.now();
+    if (now - lastDraw < 1000 / FPS - 2) return;
+    lastDraw = now; frame(now);
+  }
 
   // ------------------------------------------------------------ audio / speech
   let curSpeech = null;
@@ -392,7 +442,7 @@
     const silent = () => { ctl.how = 'text'; startedAt = performance.now(); timer = setTimeout(() => endFn('text'), ctl.duration * 1000); logEv('speech-text', { url: s.url || null, dur: ctl.duration });
       trackP.then((r) => { if (curSpeech === ctl && !stopped) startLips(timerClock, r ? r.track : textTrack()); }); };
     const browser = () => {
-      if (cfg.overlay.browserVoiceFallback === false || !('speechSynthesis' in window) || !prefs.audio) return silent();
+      if (cfg.overlay.browserVoiceFallback === false || !('speechSynthesis' in window) || !prefs.audio || !audioOwner) return silent();
       try {
         const u = new SpeechSynthesisUtterance(s.text);
         const vs = speechSynthesis.getVoices(); const lang = cfg.voice?.browserLang || 'en-US';
@@ -414,13 +464,15 @@
       const r = await Promise.race([trackP, sleep(1200).then(() => null)]);
       if (stopped) return;
       if (!prefs.audio) return silent();
-      audio = SharedAudio.el; audio.onended = null; audio.onerror = null; audio.src = r ? r.blobUrl : s.url; audio.preload = 'auto';
+      if (!audioOwner) return silent();   // another overlay window is the one that speaks (only one voice on the LIVE)
+      audio = SharedAudio.el; audio.onended = null; audio.onerror = null; audio.preload = 'auto';
+      setAudioSrc(audio, r ? URL.createObjectURL(new Blob([r.bytes], { type: 'audio/mpeg' })) : s.url);
       audio.onended = () => endFn('audio');
       audio.onerror = () => { logEv('audio-error'); browser(); };
       audio.play().then(() => {
         ctl.how = 'audio'; startedAt = performance.now();
         if (r) startLips(audioClock, r.track); else { startLips(audioClock, textTrack()); trackP.then((x) => { if (x && curSpeech === ctl) { Lip.track = x.track; Lip.source = 'audio'; } }); }
-        logEv('audio-play', { url: s.url }); window.__audioLog = (window.__audioLog || []).concat({ url: s.url, at: Date.now() });
+        logEv('audio-play', { url: s.url }); window.__audioLog = (window.__audioLog || []).slice(-50).concat({ url: s.url, at: Date.now() });
       }).catch((e) => { logEv('audio-blocked', { err: e.name }); if (e.name === 'NotAllowedError') $('soundChip').hidden = false; silent(); });
     }, Math.max(0, delayMs));
     return ctl;
@@ -430,7 +482,7 @@
   function unlockAudio() {
     if (SharedAudio.unlocked) return;
     const el = SharedAudio.el;
-    el.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+    setAudioSrc(el, 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=');
     el.play().then(() => { el.pause(); SharedAudio.unlocked = true; $('soundChip').hidden = true; }).catch(() => {});
     try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume && actx.resume(); } catch {}
     try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
@@ -446,7 +498,7 @@
 
   let actx;
   function chime() {
-    if (!prefs.chime) return;
+    if (!prefs.chime || !audioOwner) return;
     try {
       actx = actx || new (window.AudioContext || window.webkitAudioContext)();
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
@@ -590,13 +642,21 @@
     $('giftLive').textContent = R.requireGift ? `send ${$('giftTxt').textContent} to unlock` : 'gifts jump the queue 🌹';
     $('tiersRow').classList.toggle('hidden', !!R.fromComments && !R.requireGift);
     $('tiersRow').innerHTML = (cfg.tiers || []).map((t) => `<span>${t.minDiamonds} coin${t.minDiamonds > 1 ? 's' : ''}: ${esc(t.name)}</span>`).join('');
-    Char.init(); Char.build();
+    Char.init();
+    const sig = JSON.stringify(o);   // state is re-sent on every status change; only rebuild her layers when the look changed
+    if (sig !== lastLook) { lastLook = sig; Char.build(); }
+    // TikFinity runs on the streaming PC only when the server uses it (not in direct-only mode)
+    const src = cfg.tiktok && cfg.tiktok.source;
+    if (src === 'direct') stopTikFinity(); else startTikFinity();
   }
+  let lastLook = '';
 
   // ------------------------------------------------------------ TikFinity (local) → server
   // The overlay runs on the streaming PC, so it can hear TikFinity at ws://127.0.0.1:21213/
   // and forward those events over the existing /ws connection. The server never talks to TikTok.
-  let serverWs = null;
+  let serverWs = null, wsWait = 1000;
+  let audioOwner = true;   // until the server says another overlay window is the voice
+  function stopSpeechAudio() { try { SharedAudio.el.pause(); } catch {} try { speechSynthesis.cancel(); } catch {} }
   function forwardTikFinity(ev) {
     if (!ev || ev.type === 'viewers' || ev.type === 'share') return;
     if (!serverWs || serverWs.readyState !== 1) return;
@@ -608,10 +668,11 @@
     serverWs.send(JSON.stringify({ type: 'tikfinity', event: ev }));
   }
   function startTikFinity() {
-    if (typeof TikFinity === 'undefined') return;
+    if (typeof TikFinity === 'undefined' || !serverWs || serverWs.readyState !== 1) return;
     TikFinity.setSink(forwardTikFinity);
     TikFinity.connect();
   }
+  function stopTikFinity() { if (typeof TikFinity !== 'undefined' && TikFinity.stop) TikFinity.stop(); }
 
   // ------------------------------------------------------------ server connection
   // keep the free Render server awake while this page is open (it sleeps after 15 min with no HTTP requests)
@@ -621,16 +682,20 @@
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${key ? '?key=' + encodeURIComponent(key) : ''}`);
     serverWs = ws;
     ws.onopen = () => {
-      $('conn').classList.add('ok');
-      startTikFinity();
+      $('conn').classList.add('ok'); wsWait = 1000;
+      // tell the server this is an overlay, so only ONE open overlay plays Mira's voice
+      ws.send(JSON.stringify({ type: 'hello', role: 'overlay', audio: !!prefs.audio && !renderMode, primary: qs.get('primary') === '1',
+        mobile: /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent), lite }));
       if (typeof TikFinity !== 'undefined' && TikFinity.state === 'live') {
         forwardTikFinity({ type: 'status', mode: 'live', message: 'TikFinity connected' });
       }
     };
-    ws.onclose = () => { if (serverWs === ws) serverWs = null; $('conn').classList.remove('ok'); setTimeout(connect, 2000); };
+    // reconnect with backoff (1 s → 15 s); never reloads the page
+    ws.onclose = () => { if (serverWs !== ws) return; serverWs = null; $('conn').classList.remove('ok'); setTimeout(connect, wsWait); wsWait = Math.min(15000, wsWait * 1.7); };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.type === 'state') { applyConfig(m); lastQueue = m.queue || []; lastChat = m.chatQueue || []; renderQueue(); }
+      if (m.type === 'audioOwner') { audioOwner = !!m.you; logEv('audio-owner', { you: audioOwner }); if (!audioOwner) stopSpeechAudio(); }
+      else if (m.type === 'state') { applyConfig(m); lastQueue = m.queue || []; lastChat = m.chatQueue || []; renderQueue(); }
       else if (m.type === 'queue') { lastQueue = m.queue; renderQueue(); }
       else if (m.type === 'chatQueue') { lastChat = m.chatQueue; renderQueue(); }
       else if (renderMode && (m.type === 'reveal' || m.type === 'say')) window.__render.events.push(m);  // the renderer plays them on its clock
@@ -667,7 +732,8 @@
 
   window.__diag = () => ({ tikfinity: typeof TikFinity === 'undefined' ? null : { state: TikFinity.state, url: TikFinity.url, count: TikFinity.count }, kind: Char.kind, rig: Rig.api ? { eye: Rig.api.state.eye, mouth: Rig.api.state.mouth.cur } : null, videoFrame: Vid.idx, videoSrc: vid.currentSrc ? vid.currentSrc.replace(location.origin, '') : null, rvfc: Vid.rvfc, mode: Char.mode, mouthOk: !!Char.mouthOk, viseme: Mouth.target, lipSource: Lip.source, speaking: !!Lip.clock,
     prophecyOn: proph.classList.contains('on'), prophecyOpacity: getComputedStyle(proph).opacity, speech: curSpeech ? curSpeech.how : null,
-    charBox: { w: charBox.clientWidth, h: charBox.clientHeight } });
+    charBox: { w: charBox.clientWidth, h: charBox.clientHeight }, lite, fps: FPS, audioOwner, rigLost: Rig.lost || 0,
+    rigCanvas: Rig.api ? [Rig.api.canvas.width, Rig.api.canvas.height] : null });
   window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync, Rig };
   // Frame-accurate renderer (?render=1): virtual clock for timers, CSS animations, lips and the video frame.
   const animBase = new WeakMap();
@@ -708,6 +774,7 @@
     diag: () => window.__diag(),
   };
 
+  if (lite) root.classList.add('lite');
   applyLayout(); syncPanel(); requestAnimationFrame(tick);
   connect();
   window.setTimeout(() => { if (!Char.inited) { Char.init(); } }, 1500);

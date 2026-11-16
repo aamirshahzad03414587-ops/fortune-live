@@ -78,7 +78,8 @@
 
   function tfRetry() {
     clearTimeout(TF.timer);
-    TF.timer = setTimeout(connectTikFinity, TF.wait);
+    if (TF.stopped) { TF.timer = null; return; }
+    TF.timer = setTimeout(() => { TF.timer = null; connectTikFinity(); }, TF.wait);
     TF.wait = Math.min(15000, Math.round(TF.wait * 1.7));   // 1s, 1.7s, 2.9s ... capped at 15s
   }
 
@@ -86,7 +87,8 @@
     if (typeof location !== 'undefined') {
       try { const q = new URLSearchParams(location.search).get('tikfinity'); if (q && /^wss?:\/\//.test(q)) TF.url = q; } catch (e) {}
     }
-    if (TF.ws) return;
+    TF.stopped = false;
+    if (TF.ws || TF.timer) return;   // already connected or a retry is scheduled (no parallel sockets)
     let ws;
     TF.state = 'connecting';
     try { ws = new WebSocket(TF.url); } catch (e) { tfRetry(); return; }
@@ -105,12 +107,14 @@
       emit(ev);
     };
     ws.onerror = () => {};
-    ws.onclose = () => { if (TF.ws === ws) TF.ws = null; tfStatus('connecting', 'Waiting for TikFinity on ' + TF.url); tfRetry(); };
+    ws.onclose = () => { if (TF.ws !== ws) return; TF.ws = null; if (TF.stopped) return; if (TF.state !== 'connecting' || !TF.told) { TF.told = true; tfStatus('connecting', 'Waiting for TikFinity on ' + TF.url); } else TF.state = 'connecting'; tfRetry(); };
   }
 
   const api = {
     TF, tfNormalize, tfDuplicate, tfDedupeKey, tfUser, connect: connectTikFinity,
     setSink(fn) { TF.sink = fn; },
+    /** Stop trying (direct-only mode): close the socket and cancel the retry timer. */
+    stop() { TF.stopped = true; clearTimeout(TF.timer); TF.timer = null; const w = TF.ws; TF.ws = null; TF.state = 'off'; if (w) try { w.close(); } catch (e) {} },
     get state() { return TF.state; },
     get url() { return TF.url; },
     get count() { return TF.count; },

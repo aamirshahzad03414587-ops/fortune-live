@@ -159,6 +159,19 @@ const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg));
 const broadcast = (msg) => { const s = JSON.stringify(msg); wss.clients.forEach((c) => c.readyState === 1 && c.send(s)); };
 function statePayload() { return { type: 'state', overlay: config.overlay, voice: { browserLang: config.voice.browserLang, enabled: config.voice.enabled }, trigger: config.trigger, tiers: config.tiers, publicUrl: config.publicUrl, readings: live.readingsCfg, tiktok: tiktok.status, ...live.snapshot(), queue: pubQueue(live.queue) }; }
 function broadcastState() { broadcast(statePayload()); }
+// Only ONE open overlay plays Mira's voice (e.g. LIVE Studio on the PC + a preview on a phone would otherwise talk twice,
+// and TikTok hears both). Pick: ?primary=1 first, then desktop over phone, then the one opened first. The others stay silent
+// (her lips still move). Re-elected when an overlay opens or closes.
+let overlaySeq = 0, voiceWs = null;
+function electVoice() {
+  const all = [...wss.clients].filter((c) => c.overlay && c.readyState === 1);
+  const rank = (c) => [c.overlay.audio ? 0 : 1, c.overlay.primary ? 0 : 1, c.overlay.mobile ? 1 : 0, c.overlay.seq];
+  const cmp = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const best = all.sort(cmp)[0] || null;
+  const winner = best && best.overlay.audio ? best : null;
+  for (const c of all) { const you = c === winner; if (c.overlay.you !== you) { c.overlay.you = you; send(c, { type: 'audioOwner', you, overlays: all.length }); } }
+  voiceWs = winner;
+}
 wss.on('connection', (ws) => {
   send(ws, statePayload());
   if (live.current) send(ws, live.current.kind === 'reading' ? { type: 'reveal', item: live.current } : { type: 'say', item: live.current });
@@ -166,6 +179,7 @@ wss.on('connection', (ws) => {
     try {
       const m = JSON.parse(raw);
       if (m.type === 'revealDone' && live.current && m.id === live.current.id) { /* timer-driven; ignore */ }
+      else if (m.type === 'hello' && m.role === 'overlay') { ws.overlay = { audio: m.audio !== false, primary: !!m.primary, mobile: !!m.mobile, at: Date.now(), seq: ++overlaySeq }; electVoice(); }
       else if (m.type === 'tikfinityStatus') {
         ws.fromTikFinity = true;
         const state = m.state === 'live' ? 'connected' : (m.state || 'connecting');
@@ -177,6 +191,7 @@ wss.on('connection', (ws) => {
     } catch {}
   });
   ws.on('close', () => {
+    if (ws.overlay) electVoice();
     if (!ws.fromTikFinity) return;
     const still = [...wss.clients].some((c) => c !== ws && c.fromTikFinity && c.readyState === 1);
     if (!still && tiktok.tikfinity.state !== 'waiting') {
