@@ -619,6 +619,7 @@
     const startMs = (s.start ?? 3) * 1000;
     if (item.prophecy) Char.prophecy(); else if (Char.mode === 'prophecy') Char.idle();
     Rig.gesture('think', { seconds: Math.max(2, (s.start ?? 3) - 0.3) });
+    if (Rig.api && Rig.api.react) { Rig.api.gesture('glow'); later(Math.max(2200, startMs), () => Rig.api && Rig.api.react && Rig.api.react(item.sentences.join(' '), null, 'reading')); }
     const ctl = playSpeech(s, startMs);
     ctl.ended.then(() => { if (curSpeech === ctl || !curSpeech) setTimeout(() => { if (!Lip.clock) Char.idle(); }, 700); });
     later(600, () => panels({ top: true, bubble }));
@@ -646,6 +647,9 @@
     else if (item.sub === 'welcome') { Rig.gesture('nod'); Rig.gesture('happy', { seconds: 0.9 }); }
     else if (item.sub === 'greet') { Rig.gesture('happy', { seconds: 1.9 }); Rig.gesture('nod', { amp: 0.7 }); }
     else Rig.gesture('brow');
+    // phone mode (lively): an expression for what she says, and the tarot cards she pulls flip over on the canvas
+    if (Rig.api && Rig.api.react) Rig.api.react(item.text, item.mood, item.sub);
+    if (Rig.api && Rig.api.showCards && item.cards) Rig.api.showCards(item.cards, lead + 0.3);
     $('readingText').innerHTML = '';
     const startMs = (s.start ?? 0.5) * 1000;
     const ctl = playSpeech(s, startMs);
@@ -758,9 +762,10 @@
       else if (m.type === 'say') say(m.item);
       else if (m.type === 'skip') skip();
       else if (m.type === 'toast') toast(m.text, m.kind);
-      else if (m.type === 'gift') { if (Rig.bows) Rig.gesture('thanks'); else Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
+      else if (m.type === 'gift') { if (Rig.bows) Rig.gesture('thanks'); else Rig.gesture('happy', { seconds: 1.5 }); if (Rig.api && Rig.api.react) Rig.gesture('laugh', { seconds: 1.2 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
       else if (m.type === 'like') hearts(Math.ceil((m.count || 1) / 3));
-      else if (m.type === 'follow' && cfg.overlay.showFollowToasts !== false) toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
+      else if (m.type === 'follow' && Rig.api && Rig.api.react && !Lip.clock) Rig.gesture('smile', { seconds: 3 });
+      if (m.type === 'follow' && cfg.overlay.showFollowToasts !== false) toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
     };
   }
 

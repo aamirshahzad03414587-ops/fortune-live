@@ -1,6 +1,7 @@
 // Dev tool: renders the Mira v2 (?char=v2) demo: a viewer joins, Mira greets her by name, then reads her numbers.
 // Needs: server on BASE (default http://localhost:3123, no admin key or ADMIN_KEY env), playwright-core + Chrome, ffmpeg.
 //   node tools/render-v2-demo.mjs [out.mp4]      (SCRIPT='[[sec, "/sim/...", {...}], ...]' EXPECT=n URLQ='char=v2')
+//   phone mode, iPhone-sized (390x844 CSS px at 2x): MOBILE=1 URLQ='mode=phone&char=v2'
 // 1) fires the events at the real server and records what Mira says (text + TTS clip);
 // 2) replays those items in the real overlay on a virtual clock (?render=1), one screenshot per frame;
 // 3) muxes the frames with her voice clips at the exact times they were played.
@@ -46,10 +47,11 @@ const DURATION = Math.min(60, last.at - SHIFT + last.m.item.seconds + 0.5);
 // ---------------------------------------------------------------- 2. frame-accurate replay in the overlay
 fs.rmSync(TMP, { recursive: true, force: true }); fs.mkdirSync(TMP, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] });
-const page = await browser.newPage({ viewport: { width: W, height: H } });
+const MOBILE = process.env.MOBILE === '1';
+const page = await browser.newPage(MOBILE ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport: { width: W, height: H } });
 page.on('pageerror', (e) => console.log('pageerror:', e.message));
 await page.goto(`${BASE}/overlay?render=1&queue=0&chime=0&${process.env.URLQ || 'char=v2'}${KEY ? '&key=' + KEY : ''}`);
-await page.waitForFunction(() => window.__diag && window.__diag().kind === 'rig' && window.__diag().mode === 'idle', null, { timeout: 30000 });
+await page.waitForFunction(() => window.__diag && (window.__diag().kind === 'rig' || window.__diag().kind === 'phone') && window.__diag().mode === 'idle', null, { timeout: 30000 });
 await page.evaluate(() => { document.getElementById('idleBox').style.display = 'none'; window.__render.begin(0); });
 const events = log.map((e) => ({ at: Math.max(0, e.at - SHIFT), m: e.m }));
 let ei = 0; const N = Math.ceil(DURATION * FPS);
@@ -61,7 +63,7 @@ for (let i = 0; i < N; i++) {
       const F = window.__fortune;
       if (m.type === 'say') F.say(m.item);
       else if (m.type === 'reveal') F.reveal(m.item);
-      else if (m.type === 'gift') { F.Rig.gesture(F.Rig.v2 ? 'thanks' : 'happy', { seconds: 1.5 }); F.toast(`🎁 ${m.nickname} sent ${m.giftName}`, 'gift', 3); }
+      else if (m.type === 'gift') { F.Rig.gesture(F.Rig.v2 || F.Rig.bows ? 'thanks' : 'happy', { seconds: 1.5 }); if (F.Rig.api && F.Rig.api.react) F.Rig.gesture('laugh', { seconds: 1.2 }); F.toast(`🎁 ${m.nickname} sent ${m.giftName}`, 'gift', 3); }
       else if (m.type === 'follow') F.toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
       else if (m.type === 'like') F.hearts(Math.ceil((m.count || 1) / 3));
     }, m);

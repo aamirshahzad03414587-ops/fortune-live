@@ -30,6 +30,11 @@ for (const [v, c] of Object.entries(CHARS)) {
   for (const e of ['lid1', 'lid2', 'closed']) frames['eye-' + e] = { eye: e };
   frames['eye-happy'] = { eye: 'happy', happy: 1 };
   for (const s of info.shapes.filter((s) => s !== 'rest' && s !== 'orig')) frames['mouth-' + s] = { mouth: { cur: s, prev: null, f: 1 }, jaw: 2.2 * (OPEN[s] ?? 0.4) };
+  // phone mode v2 ("lively"): eye glances (the iris moved further than the PC rig's own saccades, so they read on a
+  // phone) and brows up (surprised / listening) or down (thinking); each is a small patch over the face
+  const G = { l: [-3.6, 0], r: [3.6, 0], u: [0, -2.2], d: [0, 2.0], ul: [-3, -1.8], ur: [3, -1.8] };
+  for (const [n, [x, y]] of Object.entries(G)) frames['gaze-' + n] = { gaze: { x, y, tx: x, ty: y, next: 1e9 } };
+  frames['brow-up'] = { brow: 2.8 }; frames['brow-down'] = { brow: -1.8 };
   for (const [name, o] of Object.entries(frames)) {
     const url = await page.evaluate((o) => { for (let i = 0; i < 3; i++) { api.override = structuredClone(o); api.frame(1000 + i * 16, {}); } return api.canvas.toDataURL('image/png'); }, { ...neutral, ...o });
     fs.writeFileSync(`${OUT}${v}/${name}.png`, Buffer.from(url.split(',')[1], 'base64'));
