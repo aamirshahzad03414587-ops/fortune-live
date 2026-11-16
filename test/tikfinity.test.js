@@ -43,10 +43,12 @@ test('TikFinity dedupe: same msgId is ignored the second time', () => {
   assert.equal(TF.tfDuplicate('chat', d, a), true);
 });
 
-test('bridge never connects to TikTok, even with a username', async () => {
-  const tiktok = new TikTokBridge({ handleChat() {} });
-  await assert.rejects(() => tiktok.connect('someone'), /no longer connects to TikTok/);
-  assert.equal(tiktok.status.state, 'waiting');
+test('with liveSource "tikfinity" the bridge never connects to TikTok, even with a username', async () => {
+  let loaded = false;
+  const tiktok = new TikTokBridge({ handleChat() {} }, { connector: async () => { loaded = true; return {}; } });
+  tiktok.configure({ liveSource: 'tikfinity', username: 'someone' });
+  await assert.rejects(() => tiktok.connect('someone'), /Live source is "tikfinity"/);
+  assert.equal(loaded, false); assert.equal(tiktok.status.state, 'waiting');
 });
 
 function setup() {

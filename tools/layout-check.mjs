@@ -1,28 +1,36 @@
-// Dev tool: screenshots the 9:16 overlay (idle / reading / reply) at 1080x1920 and at iPhone aspect (1080x2338),
-// draws a mock TikTok phone UI on top (top bar, right buttons, comments + joins + gift bar at the bottom) and
-// reports any box that overlaps it. Writes screenshots/layout-9x16.png.
-//   BASE=http://localhost:3123 node tools/layout-check.mjs
+// Dev tool: how the 9:16 overlay looks on a real iPhone in TikTok LIVE.
+// Renders the overlay at 1080x1920 (the LIVE Studio / OBS source) in 3 states (idle, reading, reply), crops it the way an
+// iPhone (19.5:9, object-fit cover) does, scales it to the phone screen (473x1024) and draws TikTok's own UI on top, using
+// the covered zones measured from a real phone screenshot:
+//   top ~14% (host badge, Join, league bar), comments + welcome messages on the LEFT 70% from ~32% to ~88%, input bar bottom 8%.
+// Reports every box that lands under that UI and writes a composite PNG (one row per server).
+//   SERVERS="before=http://localhost:3124,after=http://localhost:3123" node tools/layout-check.mjs screenshots/layout-phone-v2.png
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 const require = (await import('node:module')).createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT || '/tmp/shot/node_modules/playwright-core');
-const BASE = process.env.BASE || 'http://localhost:3123', KEY = process.env.ADMIN_KEY || '';
+const SERVERS = (process.env.SERVERS || `now=${process.env.BASE || 'http://localhost:3123'}`).split(',').map((x) => x.split('='));
+const OUT = process.argv[2] || 'screenshots/layout-phone-v2.png';
 const TMP = '/tmp/layoutcheck/'; fs.rmSync(TMP, { recursive: true, force: true }); fs.mkdirSync(TMP, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const W = 1080, H = 1920, PW = 473, PH = 1024, CROP = Math.round((W - (H * PW) / PH) / 2); // ~96 px cut on each side
+// TikTok's covered zones on the phone, as fractions of the phone screen
+const ZONES = { top: [0, 0, 1, 0.14], comments: [0, 0.32, 0.70, 0.88], bottom: [0, 0.92, 1, 1] };
 
-const reading = { id: 'x1', kind: 'reading', nickname: 'sara.m', name: 'Sara', tierName: 'Live prediction', level: 1, title: 'The Powerhouse',
-  keyNumbers: [{ label: 'Life Path', value: 8 }, { label: 'Year 2026', value: 9 }, { label: 'Destiny', value: 3 }, { label: 'Soul', value: 2 }],
-  sentences: ['Sara, born 12 May 1998.', 'You are Life Path 8, a powerhouse built for success, money and authority.', '2026 is your Personal Year 9, a year of endings and release.'],
-  caption: { icon: '🔮', title: 'Sara · 12 May 1998', text: 'will I travel this year?' }, speech: { text: 'x', url: null, duration: 20, start: 0.2 }, seconds: 60 };
+const reading = { id: 'x1', kind: 'reading', nickname: 'amir_k', name: 'Amir', tierName: 'Live prediction', level: 1, title: 'The Peacemaker',
+  keyNumbers: [{ label: 'Life Path', value: 2 }, { label: 'Year 2026', value: 2 }, { label: 'Destiny', value: 8 }, { label: 'Soul', value: 1 }],
+  sentences: ['Amir, born 23 June 1997.', 'You are Life Path 2, a gentle heart with the gift of bringing people together.', '2026 is your Personal Year 2, a slower year of patience, partnership and quiet growth.'],
+  caption: { icon: '🔮', title: 'Amir · 23 June 1997', text: 'will I get a new job this year?' }, speech: { text: 'x', url: null, duration: 30, start: 0.2 }, seconds: 60 };
 const reply = { id: 'x2', kind: 'say', sub: 'reply', text: 'Rohan asks, will I get married this year? Love follows its own calendar. Tell me your birth date and I will whisper your 2026 energy.',
-  comment: { nickname: 'rohan.k', text: 'will I get married this year?' }, speech: { text: 'x', url: null, duration: 20, start: 0.2 }, seconds: 60 };
+  comment: { nickname: 'rohan.k', text: 'will I get married this year?' }, speech: { text: 'x', url: null, duration: 30, start: 0.2 }, seconds: 60 };
 
 const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-const shots = []; const problems = [];
-for (const [w, h, label] of [[1080, 1920, '9:16'], [1080, 2338, 'iPhone 19.5:9']]) {
+const rows = [], problems = [];
+for (const [label, base] of SERVERS) {
+  const shots = [];
   for (const state of ['idle', 'reading', 'reply']) {
-    const page = await browser.newPage({ viewport: { width: w, height: h } });
-    await page.goto(`${BASE}/overlay?chime=0${KEY ? '&key=' + KEY : ''}`);
+    const page = await browser.newPage({ viewport: { width: W, height: H } });
+    await page.goto(`${base}/overlay?chime=0&layout=vertical`);
     await page.waitForFunction(() => window.__fortune && document.querySelector('#stage canvas, #still'), null, { timeout: 30000 });
     await sleep(2500);
     await page.evaluate(({ state, reading, reply }) => {
@@ -31,44 +39,26 @@ for (const [w, h, label] of [[1080, 1920, '9:16'], [1080, 2338, 'iPhone 19.5:9']
       if (state === 'reply') window.__fortune.say(reply);
       if (state !== 'idle') window.__fortune.toast('🎁 Ayesha_99 sent Rose', 'gift', 30);
     }, { state, reading, reply });
-    await sleep(state === 'idle' ? 500 : 3500);
-    // boxes that matter, in screen pixels
+    await sleep(state === 'idle' ? 600 : 4000);
     const boxes = await page.evaluate(() => [...document.querySelectorAll('#titleBar,#commentBubble,#revealTop,#readingBox,#idleBox,#queueBox:not(.empty),#footer')]
-      .filter((e) => getComputedStyle(e).opacity !== '0' && !e.classList.contains('hidden')).map((e) => { const r = e.getBoundingClientRect(); return { id: e.id, x: r.left, y: r.top, r: r.right, b: r.bottom }; }));
-    const zones = { top: [0, 0, w, h * 0.10], right: [w * 0.88, h * 0.45, w, h * 0.64], bottom: [0, h * 0.64, w, h] };
-    for (const b of boxes) for (const [z, [x0, y0, x1, y1]] of Object.entries(zones)) {
-      if (b.x < x1 && b.r > x0 && b.y < y1 && b.b > y0) problems.push(`${label} ${state}: #${b.id} overlaps TikTok ${z} UI (${Math.round(b.y)}-${Math.round(b.b)})`);
+      .filter((e) => !e.classList.contains('hidden') && +getComputedStyle(e).opacity > 0.05 && e.getBoundingClientRect().height > 0)
+      .map((e) => { const r = e.getBoundingClientRect(); return { id: e.id, x: r.left, y: r.top, r: r.right, b: r.bottom }; }));
+    const face = await page.evaluate(() => { const r = window.__fortune?.Rig?.api?.rig; const c = document.querySelector('#charBox').getBoundingClientRect(); return r ? { y0: c.top + (r.face[1] - 40) / r.height * c.height, y1: c.top + r.face[3] / r.height * c.height } : null; });
+    const toPhone = (x, y) => [((x - CROP) * PW) / (W - 2 * CROP), (y * PH) / H];
+    for (const b of boxes) {
+      const [x0, y0] = toPhone(b.x, b.y), [x1, y1] = toPhone(b.r, b.b);
+      if (x0 < 0 || x1 > PW) problems.push(`${label} ${state}: #${b.id} is cut off by the iPhone crop`);
+      for (const [z, [a, c, d, e]] of Object.entries(ZONES)) if (x0 < d * PW && x1 > a * PW && y0 < e * PH && y1 > c * PH) problems.push(`${label} ${state}: #${b.id} under TikTok ${z} (${(y0 / PH * 100).toFixed(0)}-${(y1 / PH * 100).toFixed(0)}% high)`);
+      if (face && b.id !== 'footer' && b.y < face.y1 && b.b > face.y0 && b.x < 700 && b.r > 380) problems.push(`${label} ${state}: #${b.id} covers Mira's face`);
     }
-    // mock TikTok phone UI on top
-    await page.evaluate(({ w, h }) => {
-      const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:999;pointer-events:none;font:600 26px system-ui;color:#fff';
-      const bar = h * 0.10, bot = h * 0.64;
-      d.innerHTML = `
-        <div style="position:absolute;left:0;right:0;top:0;height:${bar}px;background:rgba(255,40,80,.18);border-bottom:4px dashed #ff4d6d"></div>
-        <div style="position:absolute;left:24px;top:${bar * 0.35}px;padding:10px 26px 10px 10px;border-radius:40px;background:rgba(0,0,0,.45);display:flex;gap:12px;align-items:center"><span style="width:56px;height:56px;border-radius:50%;background:#bbb;display:inline-block"></span>Host · 1.2K likes <b style="background:#fe2c55;padding:4px 14px;border-radius:20px">Follow</b></div>
-        <div style="position:absolute;right:24px;top:${bar * 0.4}px;display:flex;gap:8px;align-items:center"><span style="width:46px;height:46px;border-radius:50%;background:#999"></span><span style="width:46px;height:46px;border-radius:50%;background:#aaa"></span><span style="padding:8px 14px;border-radius:20px;background:rgba(0,0,0,.45)">327</span><span style="font-size:40px">✕</span></div>
-        <div style="position:absolute;right:0;width:${w * 0.12}px;top:${h * 0.45}px;height:${h * 0.19}px;background:rgba(255,40,80,.12);border-left:4px dashed #ff4d6d;display:flex;flex-direction:column;align-items:center;justify-content:space-around;font-size:54px">💗<span>↗</span><span>🎁</span></div>
-        <div style="position:absolute;left:0;right:0;top:${bot}px;bottom:0;background:linear-gradient(180deg,rgba(255,40,80,.10),rgba(0,0,0,.55));border-top:4px dashed #ff4d6d"></div>
-        <div style="position:absolute;left:28px;width:${w * 0.72}px;top:${bot + 30}px;display:flex;flex-direction:column;gap:14px">
-          <div style="background:rgba(0,0,0,.35);padding:8px 16px;border-radius:18px;width:max-content">👋 zoya_22 joined</div>
-          <div style="background:rgba(0,0,0,.35);padding:8px 16px;border-radius:18px"><b style="color:#ffd27a">sara.m</b> Sara 12/05/1998 will I travel this year?</div>
-          <div style="background:rgba(0,0,0,.35);padding:8px 16px;border-radius:18px"><b style="color:#ffd27a">omar_fq</b> my name is Omar, born 25 Nov 1991</div>
-          <div style="background:rgba(0,0,0,.35);padding:8px 16px;border-radius:18px"><b style="color:#ffd27a">hina_x</b> hi Mira 💜</div>
-          <div style="background:rgba(254,44,85,.6);padding:8px 16px;border-radius:18px;width:max-content">🌹 Ayesha_99 sent Rose x1</div>
-          <div style="background:rgba(0,0,0,.35);padding:8px 16px;border-radius:18px;width:max-content">👋 bilal joined</div>
-        </div>
-        <div style="position:absolute;left:24px;right:24px;bottom:${h * 0.025}px;display:flex;gap:16px;align-items:center"><div style="flex:1;padding:22px 28px;border-radius:40px;background:rgba(255,255,255,.18)">Add comment…</div><span style="font-size:52px">🎁</span><span style="font-size:52px">💗</span><span style="font-size:52px">↗</span></div>
-        <div style="position:absolute;left:24px;top:${bar + 6}px;font:700 22px system-ui;color:#ff8da1;text-shadow:0 0 4px #000">TikTok top bar ↑</div>
-        <div style="position:absolute;left:24px;top:${bot - 34}px;font:700 22px system-ui;color:#ff8da1;text-shadow:0 0 4px #000">TikTok comments / joins / gifts ↓</div>`;
-      document.body.appendChild(d);
-    }, { w, h });
-    const f = `${TMP}${label.replace(/\W+/g, '')}-${state}.png`;
-    await page.screenshot({ path: f }); shots.push({ f, w, h, label, state });
-    await page.close();
+    if (face) problems.push(`${label} ${state}: face at ${(face.y0 / H * 100).toFixed(0)}-${(face.y1 / H * 100).toFixed(0)}% height`);
+    const raw = `${TMP}${label}-${state}-raw.png`, out = `${TMP}${label}-${state}.png`;
+    await page.screenshot({ path: raw }); await page.close();
+    shots.push({ raw, out, state });
   }
+  rows.push({ label, shots });
 }
 await browser.close();
-// side by side, 540 px wide each
-const OUT = process.argv[2] || 'screenshots/layout-9x16.png';
-execFileSync('python3', ['tools/layout-composite.py', OUT, ...shots.map((s) => `${s.f}::${s.label} · ${s.state}`)], { stdio: 'inherit' });
-console.log(problems.length ? 'OVERLAPS:\n  ' + problems.join('\n  ') : 'no overlaps with the TikTok UI zones');
+fs.writeFileSync(`${TMP}plan.json`, JSON.stringify({ rows, crop: CROP, pw: PW, ph: PH, zones: ZONES }));
+execFileSync('python3', ['tools/layout-composite.py', `${TMP}plan.json`, OUT], { stdio: 'inherit' });
+console.log(problems.filter((p) => !/face at/.test(p)).length ? 'ISSUES:\n  ' + problems.join('\n  ') : 'no boxes under TikTok UI\n  ' + problems.join('\n  '));

@@ -20,7 +20,7 @@ An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime for
 | Mira's voice | `src/tts.js` | Free Microsoft Edge neural voices (en-US-AvaNeural at +2% speed, +6% pitch by default: a bright young-adult woman, median pitch about 216 Hz; Urdu ur-PK-UzmaNeural). The server makes an MP3 and the overlay plays it, so it **works inside OBS**. |
 | Mira's brain | `src/chat.js` | Comment filters (spam, links, swear words), built-in reply engine (greetings, love, money, career, health, birthdays, thanks, "who are you", Roman Urdu), or optional AI replies with any OpenAI-compatible API key. |
 | Control panel | `/admin` | TikFinity setup, simulator, queue controls (pause/skip/clear), limits editor, delete all data. |
-| LIVE events | `public/tikfinity.js`, `src/tiktok.js` | The overlay listens to the TikFinity desktop app on the streaming PC (`ws://127.0.0.1:21213/`) and forwards gifts, comments, likes, follows and joins to the server. The server never connects to TikTok. |
+| LIVE events | `src/tiktok.js`, `public/tikfinity.js` | **Direct** (default when `TIKTOK_USERNAME` is set): the server reads the LIVE itself with `tiktok-live-connector`, so no PC app is needed. **TikFinity**: the overlay listens to the TikFinity desktop app (`ws://127.0.0.1:21213/`). **Both**: the same event from both sources is counted once. |
 | Limits | `config.json` (or the control panel) | Trigger gift, minimum coins, tiers, per-viewer limits, queue size, seconds on screen, data retention. |
 
 ---
@@ -60,8 +60,19 @@ An interactive TikTok LIVE show hosted by **Mystic Mira**, an animated anime for
 ### TikTok LIVE Studio
 Add a source → **Link / Browser source** (the name varies by version) → paste the overlay URL and set the size to **1080 × 1920**. If your LIVE Studio version has no browser source, stream from OBS instead (window capture or virtual camera). Go live only from LIVE Studio — don't stream to TikTok with a stream key from another tool.
 
-### Connect TikFinity (required for likes, comments and gifts)
-The game never talks to TikTok from the server. The overlay, running on your streaming PC, reads live events from the **TikFinity desktop app**.
+### Direct mode: read the LIVE from the server (no TikFinity, works from a phone)
+
+Set `TIKTOK_USERNAME` (Render → Environment) or type the username in **1 · LIVE events** in the control panel, then pick **Direct**. The server:
+* connects by itself when the account goes LIVE, checking every 45 s while it is offline (`tiktok.retrySeconds`);
+* reconnects 10 s after a dropped connection, and waits for the next LIVE after one ends;
+* shows `connected / waiting / error` with the exact reason in the control panel and the Render logs (`[tiktok] direct @user: ...`).
+
+If TikTok starts blocking unsigned connections (errors about signatures, captcha or 403), get a free key from eulerstream.com and set `SIGN_API_KEY`. Choose the source with `LIVE_SOURCE` = `direct`, `tikfinity` or `both` (with both, duplicates are counted once and likes come only from the direct connection).
+
+**Render free plan:** the server sleeps after 15 minutes without HTTP requests, and a sleeping server can't read the LIVE. While the overlay page is open (in LIVE Studio, OBS or a phone browser) it pings `/healthz` every 4 minutes and keeps the server awake, so the direct connection keeps working. Open the overlay a minute before you go LIVE so the server is awake when the LIVE starts.
+
+### Or connect TikFinity (optional)
+With the TikFinity source, the server doesn't connect to TikTok. The overlay, running on your streaming PC, reads live events from the **TikFinity desktop app**.
 
 1. Install the TikFinity **desktop app** from <https://tikfinity.zerody.one/> (the website alone is not enough).
 2. Open it and connect by **username** — don't sign in with your TikTok password.
@@ -148,7 +159,13 @@ Gift streaks are added up: 30 Roses in a streak count as 30 coins and unlock the
 
 ### Phone layout (9:16, default)
 
-The overlay is 1080 wide and at least 1920 tall (9:16). On taller screens such as an iPhone (about 19.5:9) it grows taller instead of showing black bars. Every box sits in the part of the screen that TikTok's own buttons don't cover: below the top bar (top ~10%), above the comments, joins and gift bar (bottom ~36%), and away from the like/share buttons (right ~12%). The title, the how-to box, the viewer's question and the reading card are near the top, and Mira sits right under them. `node tools/layout-check.mjs` takes screenshots with a mock TikTok UI on top, reports any overlap and writes `screenshots/layout-9x16.png`.
+The overlay is 1080×1920 (9:16) and grows taller on taller screens. It is built for how TikTok shows it on an iPhone: the 1080×1920 picture is cropped about 96 px on each side, TikTok's own bar covers the top ~14%, and comments and join messages cover the left ~70% from ~32% down to ~88%, with the input bar at the bottom. So:
+* the title and the compact how-to box sit at 14–26%; during a reading, a card with the name, date, question and numbers replaces them;
+* Mira is zoomed in, with her face at about 28–42%;
+* her words show just under her face (43–55%), above most of the comments;
+* the queue and gift messages are in the right column, where comments don't reach, and the disclaimer is a tiny vertical line on the right edge.
+
+`SERVERS="before=http://localhost:3124,after=http://localhost:3123" node tools/layout-check.mjs` renders idle / reading / reply, crops them like an iPhone, draws TikTok's UI on top, reports overlaps and writes `screenshots/layout-phone-v2.png`.
 
 ## Mira: animation, voice and chat
 
@@ -227,7 +244,7 @@ Without a key, Mira uses her built-in reply engine, which is free, offline and d
 * **Family influence:** the Expression number of the mother's and father's names.
 * An optional question is matched to a topic (love, career, money, health, travel, family, study, general) and answered with fixed guidance for their Personal Year.
 
-Run the tests: `npm test` (65 tests, including TikFinity event ingest: video track, video files and fallback, number calculations, every possible birth date, every meaning present, gift and code matching, limits, the reading queue, comment filters, chat queue order, cooldowns and modes, the reply engine, the AI fallback, voice fallback, idle questions, and lip sync: mouth shut in silences, open while speaking, no flicker, same result for quiet and loud audio, text fallback, patch sizes).
+Run the tests: `npm test` (71 tests, including the direct TikTok connection (mocked): connect, retry while offline, reconnect, de-duplication with TikFinity, including TikFinity event ingest: video track, video files and fallback, number calculations, every possible birth date, every meaning present, gift and code matching, limits, the reading queue, comment filters, chat queue order, cooldowns and modes, the reply engine, the AI fallback, voice fallback, idle questions, and lip sync: mouth shut in silences, open while speaking, no flicker, same result for quiet and loud audio, text fallback, patch sizes).
 
 ---
 

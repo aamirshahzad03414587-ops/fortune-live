@@ -492,6 +492,7 @@
     $('readingBox').classList.toggle('hidden', !box); $('readingBox').classList.toggle('solo', solo);
     $('commentBubble').classList.toggle('hidden', !bubble);
     $('idleBox').classList.toggle('hidden', top || box || bubble || hold);
+    root.classList.toggle('busy', !!(top || bubble || hold));
   }
 
   function reveal(item) {
@@ -500,11 +501,13 @@
     const cap = item.caption && cfg.overlay.showChat !== false ? item.caption : null;
     if (cap) { $('cbAvatar').textContent = cap.icon || '🔮'; $('cbName').textContent = cap.title || ''; $('cbText').textContent = cap.text || ''; }
     $('commentBubble').classList.toggle('isQuestion', !!cap);
-    const bubble = !!cap;
+    const vert = prefs.layout !== 'landscape';
+    const bubble = !!cap && !vert; // on phones the question goes inside the card (one box instead of two)
+    $('revQ').textContent = cap && cap.text && !/^@/.test(cap.text) ? cap.text : '';
     panels({ hold: true, bubble });
     const card = $('card'); card.classList.remove('flip');
     $('cardNum').textContent = item.keyNumbers[0].value; $('cardTitle').textContent = item.title;
-    $('tierBadge').textContent = item.tierName; $('name').textContent = item.name; $('handle').textContent = '@' + item.nickname;
+    $('tierBadge').textContent = item.tierName; $('name').textContent = item.name; $('handle').textContent = '@' + item.nickname + (item.caption && item.caption.title && item.caption.title.includes('·') ? ' · ' + item.caption.title.split('·').slice(1).join('·').trim() : '');
     $('nums').innerHTML = item.keyNumbers.slice(1).map((n) => `<div class="num"><b>${n.value}</b><span>${esc(n.label)}</span></div>`).join('');
     $('readingText').innerHTML = '';
     chime(); boost = 40;
@@ -540,7 +543,7 @@
     $('readingText').innerHTML = '';
     const startMs = (s.start ?? 0.5) * 1000;
     const ctl = playSpeech(s, startMs);
-    later(startMs, () => subtitles([item.text], ctl, prefs.layout === 'landscape' ? 300 : 220));
+    later(startMs, () => subtitles([item.text], ctl, prefs.layout === 'landscape' ? 300 : 160));
     ctl.ended.then(() => { if (!Lip.clock) Char.idle(); });
     later((item.seconds || 5) * 1000, endShow);
   }
@@ -611,6 +614,8 @@
   }
 
   // ------------------------------------------------------------ server connection
+  // keep the free Render server awake while this page is open (it sleeps after 15 min with no HTTP requests)
+  setInterval(() => fetch('/healthz', { cache: 'no-store' }).catch(() => {}), 4 * 60e3);
   function connect() {
     const key = qs.get('key');
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${key ? '?key=' + encodeURIComponent(key) : ''}`);

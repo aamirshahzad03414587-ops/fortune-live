@@ -17,7 +17,7 @@
   button.alt { background:#5b3fa0; color:#fff; } button.red { background:#e05a5a; color:#fff; }
   .row { display:flex; gap:8px; } .row > * { flex:1; }
   .status { padding:4px 10px; border-radius:999px; background:#444; font-size:13px; }
-  .status.connected { background:#2f8f4e; } .status.error { background:#a33; } .status.connecting { background:#a77a1a; } .status.waiting, .status.disconnected { background:#444; }
+  .status.connected { background:#2f8f4e; } .status.error { background:#a33; } .status.connecting { background:#a77a1a; } .status.waiting, .status.disconnected, .status.off { background:#444; } .status.reconnecting { background:#a77a1a; }
   code { background:#000; padding:2px 6px; border-radius:6px; font-size:12px; word-break:break-all; }
   #log { height:160px; overflow:auto; background:#000; padding:8px; font-family:Consolas,monospace; font-size:12px; border-radius:8px; }
   ul { padding-left:18px; margin:6px 0; } small { color:#aaa; }
@@ -27,8 +27,14 @@
 <header><h1>🔮 Fortune Live · Control panel</h1><span class="status" id="st">…</span><span id="stats"></span></header>
 <div class="grid">
   <div class="box">
-    <h2>1 · TikFinity (LIVE events)</h2>
-    <p>This app never connects to TikTok from the server. Likes, comments, gifts and joins come from the <b>TikFinity desktop app</b> on the PC that shows the overlay.</p>
+    <h2>1 · LIVE events</h2>
+    <div class="row"><div><label>Where events come from</label><select id="tSource"><option value="direct">Direct: this server reads the LIVE (no PC app, works on a phone)</option><option value="tikfinity">TikFinity desktop app on the streaming PC</option><option value="both">Both (duplicates are counted once)</option></select></div>
+    <div><label>TikTok username</label><input id="tUser" placeholder="silversecretsketchbook"></div></div>
+    <button id="tSave">Save &amp; connect</button><button id="tConn" class="alt">Connect now</button><button id="tDisc" class="alt">Stop direct connection</button>
+    <p id="tStat" style="margin:8px 0;font-size:14px;line-height:1.5"></p>
+    <small>Direct mode connects by itself when you go LIVE (checks every 45 s while you are offline) and reconnects if the connection drops. Keep the overlay page open somewhere: on the free Render plan the server sleeps after 15 minutes with no visitors, and a sleeping server can't read the LIVE. If TikTok blocks the connection, add a free <b>SIGN_API_KEY</b> from eulerstream.com in Render → Environment.</small>
+    <h3 style="margin:14px 0 4px">TikFinity (optional)</h3>
+    <p>With TikFinity, the server doesn't connect to TikTok itself. Likes, comments, gifts and joins come from the <b>TikFinity desktop app</b> on the PC that shows the overlay.</p>
     <ol style="padding-left:20px;margin:8px 0;line-height:1.5">
       <li>Install TikFinity from <a href="https://tikfinity.zerody.one/" target="_blank" rel="noopener" style="color:#f4d27a">tikfinity.zerody.one</a> (the desktop app, not only the website).</li>
       <li>Open it and connect by <b>username</b> (don't sign in with your TikTok password).</li>
@@ -154,6 +160,7 @@ function fill() {
   $('lUser').value = c.limits.readingsPerUserPerStream; $('lCode').value = c.limits.usesPerCode; $('lQueue').value = c.limits.maxQueueLength;
   $('lCredit').value = c.limits.giftCreditMinutes; $('lGap').value = c.limits.secondsBetweenReadings; $('dRet').value = c.data.retentionHours;
   $('cTiers').value = c.tiers.map(t => `${t.minDiamonds} | ${t.name} | ${t.level} | ${t.secondsOnScreen}`).join('\n');
+  $('tSource').value = c.tiktok?.liveSource || (c.tiktok?.username ? 'direct' : 'tikfinity'); $('tUser').value = c.tiktok?.username || '';
   const R = c.readings || {}; $('rFrom').checked = R.fromComments !== false; $('rGift').checked = !!R.requireGift; $('rPrio').checked = R.giftPriority !== false; $('rPer').value = R.perViewerPerStream || 1; $('rMax').value = R.maxQueue || 10; $('rHow').value = R.howToEverySeconds ?? 75; $('rForm').checked = !!R.privateForm;
   $('oTitle').value = c.overlay.title; $('raw').value = JSON.stringify(c, null, 2);
   const ch = c.chat; $('chEnabled').checked = ch.enabled; $('chMode').value = ch.mode; $('chMax').value = ch.maxQueue; $('chCool').value = ch.userCooldownSeconds;
@@ -166,7 +173,15 @@ function fill() {
   const CH = c.overlay.character; $('mLead').value = CH.mouth?.leadMs ?? 30; $('mEnabled').checked = CH.mouth?.enabled !== false; $('bEnabled').checked = CH.breathing?.enabled !== false; $('animMode').value = CH.mode || 'rig'; $('chQuality').value = CH.video?.quality || 'auto';
   const L = c.llm; $('lEnabled').checked = L.enabled; $('lBase').value = L.baseUrl; $('lModel').value = L.model; $('lKey').value = L.apiKey;
 }
-function status(t) { const el = $('st'); const state = (t && t.state) || 'waiting'; el.className = 'status ' + state; el.textContent = `TikFinity: ${state}${t && t.username ? ' @' + t.username : ''}${t && t.message ? ' · ' + t.message : ''}`; }
+function status(t) {
+  t = t || {}; const el = $('st'); const state = t.state || 'waiting'; el.className = 'status ' + state;
+  el.textContent = `LIVE (${t.source || 'tikfinity'}): ${state}${t.username ? ' @' + t.username : ''}`;
+  const row = (n, x) => x ? `<b>${n}:</b> ${x.state}${x.message ? ' · ' + x.message.replace(/</g, '&lt;') : ''}` : '';
+  if ($('tStat')) $('tStat').innerHTML = [t.source !== 'tikfinity' && row('Direct', t.direct), t.source !== 'direct' && row('TikFinity', t.tikfinity), t.counts ? `<small>events: direct ${t.counts.direct || 0} · TikFinity ${t.counts.tikfinity || 0} · duplicates skipped ${t.counts.duplicates || 0}</small>` : ''].filter(Boolean).join('<br>');
+}
+$('tSave').onclick = async () => { config.tiktok = { ...config.tiktok, liveSource: $('tSource').value, username: $('tUser').value.trim().replace(/^@/, '') }; try { await api('/config', config); if ($('tSource').value !== 'tikfinity') await api('/connect', { username: config.tiktok.username }).catch(() => {}); log('LIVE source saved'); } catch (e) { log('Save failed: ' + e.message); } };
+$('tConn').onclick = async () => { try { const r = await api('/connect', { username: $('tUser').value.trim().replace(/^@/, '') }); status(r); } catch (e) { log('Connect: ' + e.message); } };
+$('tDisc').onclick = async () => status(await api('/disconnect', {}));
 function renderQueue(l) {
   $('now').innerHTML = !l.current ? '<small>Nothing on screen</small>' : l.current.kind === 'say' ? `<b>Mira speaking:</b> ${l.current.text}` : `<b>On screen:</b> ${l.current.name} (@${l.current.nickname}) · ${l.current.tierName}`;
   $('q').innerHTML = (l.queue || []).map(i => `<li>${i.name} (@${i.nickname}) · ${i.tierName} · ${i.code}</li>`).join('');

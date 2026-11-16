@@ -7,7 +7,8 @@ export const CONFIG_PATH = process.env.CONFIG_PATH || path.join(ROOT, 'config.js
 
 const DEFAULTS = {
   port: 3000, publicUrl: '', adminKey: '',
-  tiktok: { username: '', autoConnect: false },
+  // liveSource: 'direct' (server reads the LIVE), 'tikfinity' (TikFinity desktop app via the overlay) or 'both'; '' = direct when a username is set
+  tiktok: { username: '', autoConnect: false, liveSource: '', retrySeconds: 45 },
   trigger: { giftName: 'Rose', minDiamonds: 1, acceptOtherGifts: true },
   tiers: [{ name: 'Short reading', minDiamonds: 1, level: 1, secondsOnScreen: 20 }],
   // viewers comment "name + birth date (+ question)" on the LIVE; requireGift=false means free readings for everyone (1 per viewer)
@@ -50,6 +51,8 @@ export function loadConfig() {
   if (process.env.ADMIN_KEY) cfg.adminKey = process.env.ADMIN_KEY;
   if (process.env.PUBLIC_URL) cfg.publicUrl = process.env.PUBLIC_URL;
   if (process.env.TIKTOK_USERNAME) cfg.tiktok.username = process.env.TIKTOK_USERNAME;
+  if (process.env.LIVE_SOURCE) cfg.tiktok.liveSource = process.env.LIVE_SOURCE;
+  if (process.env.SIGN_API_KEY) cfg.tiktok.signApiKey = process.env.SIGN_API_KEY;
   if (process.env.LLM_API_KEY) { cfg.llm.apiKey = process.env.LLM_API_KEY; if (process.env.LLM_BASE_URL) cfg.llm.baseUrl = process.env.LLM_BASE_URL; if (process.env.LLM_MODEL) cfg.llm.model = process.env.LLM_MODEL; }
   cfg.tiers = [...cfg.tiers].sort((a, b) => a.minDiamonds - b.minDiamonds);
   return cfg;

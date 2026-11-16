@@ -19,6 +19,8 @@ const live = new LiveEngine({ config, store, tts });
 live.on('log', (m) => console.log('[mira]', m));
 const tiktok = new TikTokBridge(live);
 const phoneBridge = new PhoneBridge();
+const configureTikTok = () => tiktok.configure({ liveSource: config.tiktok.liveSource, username: config.tiktok.username, signApiKey: config.tiktok.signApiKey || '', retrySeconds: config.tiktok.retrySeconds });
+configureTikTok();
 setInterval(() => { const n = store.purgeExpired(); if (n) console.log(`[data] auto-deleted ${n} expired submission(s)`); }, 5 * 60e3).unref();
 
 const app = express();
@@ -45,6 +47,7 @@ app.get('/', (req, res) => res.sendFile(path.join(pub, formOn() ? 'form.html' : 
 app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report.html')));
 app.get('/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
+app.get('/healthz', (req, res) => res.json({ ok: true, tiktok: tiktok.status.state }));
 app.get('/tts/:id.mp3', (req, res) => {
   const buf = tts.get(req.params.id);
   if (!buf) return res.status(404).end();
@@ -93,12 +96,16 @@ admin.post('/config', (req, res) => {
     const next = req.body;
     if (!next || typeof next !== 'object' || !Array.isArray(next.tiers)) throw new Error('Invalid config');
     if (next.llm && next.llm.apiKey === MASK) next.llm.apiKey = config.llm.apiKey;
-    saveConfig(next); config = loadConfig(); live.config = config; broadcastState();
+    const before = tiktok.usesDirect;
+    saveConfig(next); config = loadConfig(); live.config = config; configureTikTok();
+    if (tiktok.usesDirect && !before && tiktok.username) tiktok.connect().catch(() => {});
+    if (!tiktok.usesDirect && before) tiktok.disconnect().catch(() => {});
+    broadcastState();
     res.json({ ok: true, config: publicCfg() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 admin.post('/connect', async (req, res) => {
-  try { await tiktok.connect(); res.json(tiktok.status); }
+  try { await tiktok.connect(req.body?.username); res.json(tiktok.status); }
   catch (e) { res.status(400).json({ error: e.message, tiktok: tiktok.status }); }
 });
 admin.post('/disconnect', async (req, res) => { await tiktok.disconnect(); res.json(tiktok.status); });
@@ -172,7 +179,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (!ws.fromTikFinity) return;
     const still = [...wss.clients].some((c) => c !== ws && c.fromTikFinity && c.readyState === 1);
-    if (!still && tiktok.status.state !== 'waiting') {
+    if (!still && tiktok.tikfinity.state !== 'waiting') {
       tiktok.setStatus('waiting', 'Open the overlay on the streaming PC with TikFinity running (ws://127.0.0.1:21213/)');
     }
   });
@@ -193,14 +200,15 @@ tiktok.on('log', (m) => console.log(m));
 
 server.listen(config.port, () => {
   const base = `http://localhost:${config.port}`;
-  const k = config.adminKey ? `?key=${config.adminKey}` : '';
+  const k = config.adminKey ? '?key=<ADMIN_KEY>' : '';
   console.log('\n🔮  Fortune Live is running');
   console.log(`   Viewer form (put this link in bio): ${config.publicUrl || base}/`);
   console.log(`   OBS overlay vertical 1080x1920:   ${base}/overlay`);
   console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay?layout=landscape`);
   console.log(`   Control panel + simulator:        ${base}/admin${k}`);
   if (!config.adminKey) console.log('   (No adminKey set: overlay and admin only open on this PC. Set "adminKey" in config.json before hosting online.)');
-  console.log('   LIVE events for the fortune overlay come from the TikFinity desktop app on the streaming PC (ws://127.0.0.1:21213/).');
+  console.log(`   LIVE source: ${tiktok.source}${tiktok.usesDirect ? ` (server reads @${tiktok.username || '?'} directly${tiktok.signApiKey ? ', signed' : ''})` : ''}${tiktok.usesTikFinity ? ' + TikFinity desktop app via the overlay' : ''}`);
   console.log('   Fight-game phone mode (server-side TikTok connection):  ' + base + '/tt?u=USERNAME');
   console.log('');
+  if (tiktok.usesDirect && tiktok.username) tiktok.connect().catch((e) => console.log('[tiktok]', e.message));
 });

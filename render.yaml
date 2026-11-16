@@ -9,3 +9,11 @@ services:
     envVars:
       - key: ADMIN_KEY
         generateValue: true
+      # LIVE events: the server reads the LIVE itself when TIKTOK_USERNAME is set (LIVE_SOURCE = direct | tikfinity | both)
+      - key: TIKTOK_USERNAME
+        sync: false
+      - key: LIVE_SOURCE
+        sync: false
+      # optional Euler Stream key (eulerstream.com) if TikTok blocks unsigned connections
+      - key: SIGN_API_KEY
+        sync: false
