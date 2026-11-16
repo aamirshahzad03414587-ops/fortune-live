@@ -48,6 +48,14 @@ test('direct: connects, turns TikTok events into Mira events, gift streaks count
   conn.emit('gift', { user, giftDetails: { giftName: 'Rose', diamondCount: 1, giftType: 1 }, repeatCount: 5, repeatEnd: true });
   assert.equal(live.got.gift.length, 1); assert.equal(live.got.gift[0].diamonds, 5);
   conn.emit('member', { user: { uniqueId: 'sara', nickname: 'Sara' } }); assert.equal(live.got.join.length, 1);
+  // tiktok-live-connector 2.x (proto v3) shapes, as seen live on Render
+  const v3 = { id: '7001', displayId: 'hina_x', nickname: 'Hina' };
+  conn.emit('chat', { user: v3, content: 'Hina 3/7/2001 will I travel?', userIdentity: { isFollowerOfAnchor: true } });
+  assert.deepEqual([live.got.chat[1].userId, live.got.chat[1].nickname, live.got.chat[1].comment, live.got.chat[1].isFollower], ['hina_x', 'Hina', 'Hina 3/7/2001 will I travel?', true]);
+  conn.emit('gift', { user: v3, gift: { name: 'Doughnut', diamondCount: 30, type: 2 }, repeatCount: 1, repeatEnd: 0 });
+  assert.equal(live.got.gift[1].giftName, 'Doughnut'); assert.equal(live.got.gift[1].diamonds, 30);
+  conn.emit('like', { user: v3, count: 7 }); assert.equal(live.got.like[0].count, 7);
+  conn.emit('chat', { user: {}, content: '' }); assert.equal(live.got.chat.length, 2); // no user -> ignored
   await b.disconnect(); assert.equal(conn.closed, true); assert.equal(b.status.direct.state, 'off');
 });
 

@@ -60,7 +60,7 @@ export function toTikFinity(name, d) {
     user: { uniqueId, nickname, userId, profilePictureUrl },
   };
   if (event === 'chat') {
-    out.comment = String(data.comment ?? data.text ?? data.message ?? '');
+    out.comment = String(data.comment ?? data.content ?? data.text ?? data.message ?? '');  // tiktok-live-connector 2.x (proto v3) uses `content`
   } else if (event === 'like') {
     out.likeCount = Number(data.likeCount ?? data.like_count ?? data.count ?? 1) || 1;
   } else if (event === 'gift') {

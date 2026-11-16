@@ -105,18 +105,21 @@ export class TikTokBridge extends EventEmitter {
       if (this.signApiKey) opts.signApiKey = this.signApiKey; // Euler Stream key, for when TikTok blocks unsigned connections
       const conn = new TikTokLiveConnection(username, opts);
       this.conn = conn;
-      const user = (d) => ({ id: String(d?.user?.uniqueId || d?.user?.userId || ''), nick: d?.user?.nickname || d?.user?.uniqueId || 'Viewer' });
-      const send = (ev) => { if (this.conn === conn) this.ingest(ev, 'direct'); };
+      // tiktok-live-connector 2.x sends proto-v3 objects: user.displayId (the @handle), user.nickname, chat `content`,
+      // gift `gift.{name,diamondCount,type}`; older shapes (uniqueId, comment, giftDetails) are still accepted.
+      const user = (d) => { const u = d?.user || {}; const id = String(u.uniqueId || u.displayId || u.userId || u.id || ''); return { id, nick: u.nickname || id || 'Viewer' }; };
+      const send = (ev) => { if (this.conn === conn && ev.id) this.ingest(ev, 'direct'); };
       conn.on(WebcastEvent.CHAT, (d) => {
         const idn = d.userIdentity || {};
-        send({ type: 'chat', ...user(d), text: d.comment || '', isFollower: !!(idn.isFollowerOfAnchor || idn.isMutualFollowingWithAnchor || Number(d.user?.followInfo?.followStatus) >= 1), isGifter: !!idn.isGiftGiverOfAnchor });
+        send({ type: 'chat', ...user(d), text: String(d.content ?? d.comment ?? ''), isFollower: !!(idn.isFollowerOfAnchor || idn.isMutualFollowingWithAnchor || Number(d.user?.followInfo?.followStatus) >= 1), isGifter: !!idn.isGiftGiverOfAnchor });
       });
       conn.on(WebcastEvent.GIFT, (d) => {
-        const det = d.giftDetails || {}, ext = d.extendedGiftInfo || {};
-        if ((det.giftType ?? ext.type) === 1 && !d.repeatEnd) return; // streak still running; count it when it ends
-        send({ type: 'gift', ...user(d), giftName: det.giftName || ext.name || `Gift ${d.giftId}`, coins: Number(det.diamondCount || ext.diamond_count || 0), count: Number(d.repeatCount || 1) });
+        const g = d.gift || d.giftDetails || {}, ext = d.extendedGiftInfo || {};
+        const type = g.type ?? g.giftType ?? ext.type;
+        if (type === 1 && !d.repeatEnd) return; // streak still running; count it when it ends
+        send({ type: 'gift', ...user(d), giftName: g.name || g.giftName || ext.name || `Gift ${d.giftId}`, coins: Number(g.diamondCount || ext.diamond_count || 0), count: Number(d.repeatCount || d.comboCount || 1) });
       });
-      conn.on(WebcastEvent.LIKE, (d) => send({ type: 'like', ...user(d), count: Number(d.likeCount || 1) }));
+      conn.on(WebcastEvent.LIKE, (d) => send({ type: 'like', ...user(d), count: Number(d.count ?? d.likeCount ?? 1) || 1 }));
       conn.on(WebcastEvent.FOLLOW, (d) => send({ type: 'follow', ...user(d) }));
       conn.on(WebcastEvent.MEMBER, (d) => send({ type: 'join', ...user(d) }));
       conn.on(WebcastEvent.STREAM_END, () => {
