@@ -7,6 +7,7 @@ import { loadConfig, saveConfig, ROOT } from './config.js';
 import { Store } from './store.js';
 import { LiveEngine } from './live.js';
 import { TikTokBridge } from './tiktok.js';
+import { PhoneBridge } from './bridge.js';
 import { computeReading, parseDate } from './numerology.js';
 import { TTS, VOICE_CHOICES } from './tts.js';
 import { llmReply } from './chat.js';
@@ -17,6 +18,7 @@ const tts = new TTS(() => config.voice);
 const live = new LiveEngine({ config, store, tts });
 live.on('log', (m) => console.log('[mira]', m));
 const tiktok = new TikTokBridge(live);
+const phoneBridge = new PhoneBridge();
 setInterval(() => { const n = store.purgeExpired(); if (n) console.log(`[data] auto-deleted ${n} expired submission(s)`); }, 5 * 60e3).unref();
 
 const app = express();
@@ -141,6 +143,7 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
   const fakeReq = { query: Object.fromEntries(url.searchParams), headers: req.headers, socket: req.socket };
+  if (phoneBridge.handleUpgrade(req, socket, head, url)) return; // fight-game phone mode: /tt?u=username
   if (url.pathname !== '/ws') { socket.destroy(); return; }
   void fakeReq; // overlay + its socket are public (no key needed); admin pages/API still require the key
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
@@ -197,6 +200,7 @@ server.listen(config.port, () => {
   console.log(`   OBS overlay landscape 1920x1080:  ${base}/overlay?layout=landscape`);
   console.log(`   Control panel + simulator:        ${base}/admin${k}`);
   if (!config.adminKey) console.log('   (No adminKey set: overlay and admin only open on this PC. Set "adminKey" in config.json before hosting online.)');
-  console.log('   LIVE events come from the TikFinity desktop app on the streaming PC (ws://127.0.0.1:21213/). This server never connects to TikTok.');
+  console.log('   LIVE events for the fortune overlay come from the TikFinity desktop app on the streaming PC (ws://127.0.0.1:21213/).');
+  console.log('   Fight-game phone mode (server-side TikTok connection):  ' + base + '/tt?u=USERNAME');
   console.log('');
 });
