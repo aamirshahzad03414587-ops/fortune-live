@@ -108,7 +108,7 @@ test('live: AI answers questions with memory; unsafe or failed answers fall back
   assert.equal(r.source, 'llm'); assert.match(r.text, /^Sara asks, will I find love\? Love is close/);   // question read aloud, then her answer
   assert.equal(calls[0].history.length, 0); assert.match(calls[0].context, /What you know about Sara/);
   // next viewer within the 45 s gap: built-in reply, she is never silent
-  live.handleChat({ userId: 'b', nickname: 'Bo', comment: 'what is my lucky colour?' });
+  live.handleChat({ userId: 'b', nickname: 'Bo', comment: 'what should I study next year?' });
   const r2 = await live.makeReply(live.chatQueue[1]);
   assert.equal(r2.source, 'rules'); assert.ok(r2.text.length > 5);
   // unsafe AI output is never spoken

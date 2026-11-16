@@ -3,6 +3,7 @@
 // Events: 'reveal' (reading), 'say' (reply/greet/prompt), 'queue', 'chatQueue', 'toast', 'gift', 'like', 'follow', 'idle', 'skip'
 import { EventEmitter } from 'node:events';
 import { computeReading, liveReading } from './numerology.js';
+import { answerMystic, mysticSnippets, COMMAND_PROMPTS } from './kb/index.js';
 import { AiGate, Memory, llmReady, ENGAGE_T, ENGAGE_DOB_T } from './ai.js';
 import { ReplyEngine, filterComment, llmReply, llmComplete, detectLanguage, cleanSpoken, normalizeComment, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName, extractBirthDate } from './chat.js';
 import { parseReadingComment, readingScript, showDate, partialScript, parsedWithDate } from './comment-reading.js';
@@ -465,6 +466,8 @@ export class LiveEngine extends EventEmitter {
     if (Array.isArray(custom) && custom.length) return this.replies.idlePrompt(custom);
     if (!this.readingsCfg.fromComments) return this.replies.idlePrompt();
     this.idleCount = (this.idleCount || 0) + 1;
+    // every other quiet moment teaches a magic command ("type pull a card ...")
+    if (this.chatCfg.mystic !== false && this.idleCount % 2 === 0) return this.variety.choose('idle-cmd', COMMAND_PROMPTS, String(this.idleCount), 'stream');
     return this.variety.choose('idle', IDLE_T, String(this.idleCount), 'stream');   // no repeats until all were used
   }
 
@@ -479,6 +482,12 @@ export class LiveEngine extends EventEmitter {
     const rules = () => ({ text: this.replies.reply(chat.comment, chat).text, source: 'rules' });
     if (chat.preset) return { text: chat.preset, source: 'rules' };
     if (isSelfHarm(chat.comment)) return rules();
+    // magic commands ("pull a card", "my zodiac", "love match Leo Aries" ...): the knowledge base, no AI needed
+    if (C.mystic !== false) {
+      const kb = answerMystic(chat.comment, { name: spokenName(chat.nickname), facts: this.memory.get(chat.userId, chat.nickname).facts, now: new Date(this.now()), tz: this.config.timezone || process.env.STREAM_TZ || 'Asia/Dubai',
+        pick: (cat, list) => this.variety.choose(cat, list, chat.userId, 'stream') });
+      if (kb) return { text: kb.text, source: 'kb', cards: kb.cards || null, mood: kb.mood, intent: kb.intent };
+    }
     // a birth date in a chat comment: the numbers come from code, not the AI
     if (extractBirthDate(chat.comment)) return rules();
     // the one AI slot goes to questions and answers to her questions first; plain chat gets it when none are waiting
@@ -487,7 +496,7 @@ export class LiveEngine extends EventEmitter {
       if (prefetch && !this.ai.open() && !this.ai.cached(chat.comment, L.cacheSeconds ?? 300)) return null;
       try {
         const history = this.memory.history(chat.userId);
-        const ctx = this.memory.context(chat.userId) + (chat.isGifter ? 'This viewer sent a gift tonight.\n' : '');
+        const ctx = this.memory.context(chat.userId) + mysticSnippets(chat.comment, this.memory.get(chat.userId).facts, new Date(this.now())) + (chat.isGifter ? 'This viewer sent a gift tonight.\n' : '');
         const name = spokenName(chat.nickname);
         const r = await this.ai.ask(L, { comment: chat.comment, name, cacheable: !history.length },
           () => this.llm(L, { nickname: chat.nickname, comment: chat.comment, context: ctx, history, liveReadings: !!this.readingsCfg.fromComments }));
@@ -511,12 +520,12 @@ export class LiveEngine extends EventEmitter {
     try {
       const r = await this.makeReply(chat, opt);
       if (!r) return null;
-      let { text, source } = r;
+      let { text, source } = r; const extra = { cards: r.cards || null, mood: r.mood || null, intent: r.intent || null };
       // memory: what they said and what she answered (an answer ending on a question waits for theirs)
       this.memory.get(chat.userId, chat.nickname);
       this.memory.add(chat.userId, 'user', chat.comment); this.memory.add(chat.userId, 'assistant', text);
       if (this.chatCfg.readQuestionAloud && !chat.preset) text = withQuestion(chat.nickname, chat.comment, text);
-      return { text, source, sp: await this.speech(text) };
+      return { text, source, ...extra, sp: await this.speech(text) };
     } catch { return null; }
   }
 
@@ -546,18 +555,19 @@ export class LiveEngine extends EventEmitter {
       return;
     }
     // say: reply / greet / prompt / admin
-    let text = job.text, source = 'rules', sp = null;
+    let text = job.text, source = 'rules', sp = null, cards = null, mood = job.mood || null;
     if (job.sub === 'reply') {
       const pre = this.prepared.get(job.chat.id); this.prepared.delete(job.chat.id);
       const r = (pre && (await pre)) || (await this.prepareReply(job.chat));
-      if (r) ({ text, source, sp } = r);
+      if (r) ({ text, source, sp, cards = null, mood = null } = r);
       else { text = this.replies.reply(job.chat.comment, job.chat).text; }
     }
     if (!sp) sp = await this.speech(text);
     sp = { ...sp };
     sp.start = V.talkSpeechStart;
     const total = Math.max(V.minSaySeconds ?? 3, sp.start + sp.duration + V.tailSeconds);
-    this.current = { id: `s${this.now()}`, kind: 'say', sub: job.sub, text, source, comment: job.chat ? { nickname: job.chat.nickname, text: job.chat.comment } : null, caption: job.caption || null, speech: sp, seconds: Math.round(total * 10) / 10 };
+    this.current = { id: `s${this.now()}`, kind: 'say', sub: job.sub, text, source, comment: job.chat ? { nickname: job.chat.nickname, text: job.chat.comment } : null, caption: job.caption || null, speech: sp, seconds: Math.round(total * 10) / 10,
+      ...(cards ? { cards: cards.map((c) => ({ name: c.name, reversed: !!c.reversed, arcana: c.arcana, suit: c.suit || null })) } : {}), ...(mood ? { mood } : {}) };
     if (job.sub === 'reply') {
       this.stats.replies++; if (source === 'llm') this.stats.aiReplies = (this.stats.aiReplies || 0) + 1;
       this.replyStreak = this.lastReplyUser === job.chat.userId ? this.replyStreak + 1 : 1; this.lastReplyUser = job.chat.userId;
