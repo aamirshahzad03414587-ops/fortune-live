@@ -9,6 +9,7 @@ import { LiveEngine } from './live.js';
 import { TikTokBridge } from './tiktok.js';
 import { PhoneBridge } from './bridge.js';
 import { computeReading, parseDate } from './numerology.js';
+import { diagRoute } from './diag.js';
 import { TTS, VOICE_CHOICES } from './tts.js';
 import { llmReply } from './chat.js';
 
@@ -47,6 +48,7 @@ app.get('/', (req, res) => res.sendFile(path.join(pub, formOn() ? 'form.html' : 
 app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report.html')));
 app.get('/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
+app.post('/diag', express.text({ type: '*/*', limit: '8kb' }), diagRoute());
 app.get('/healthz', (req, res) => res.json({ ok: true, tiktok: tiktok.status.state }));
 app.get('/tts/:id.mp3', (req, res) => {
   const buf = tts.get(req.params.id);

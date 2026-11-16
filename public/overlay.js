@@ -1,4 +1,5 @@
 (() => {
+  const SILENCE = '/assets/silence.mp3';
   const SharedAudio = { el: new Audio(), unlocked: false }; SharedAudio.el.setAttribute('playsinline', ''); SharedAudio.el.preload = 'auto';
   const qs = new URLSearchParams(location.search);
   const $ = (id) => document.getElementById(id);
@@ -27,16 +28,25 @@
     const lostAt = Number(LS('glLostAt') || 0), recentLoss = lostAt && Date.now() - lostAt < 24 * 3600e3;
     return !!(mobile || lowMem || recentLoss);
   })();
-  const FPS = Number(qs.get('fps')) || (lite ? 24 : 30);   // the rig and effects never draw faster than this
+  // ------------------------------------------------------------ phone mode (iPhone / iPad, any iOS browser, ?lite=1, ?mode=phone)
+  // iOS kills the tab ("A problem repeatedly occurred") long before the memory numbers an emulator shows. Phone mode has
+  // no WebGL, no video, no blend-mode / blur layers and no effect canvases: Mira is one 2D canvas the size of the screen's
+  // real pixels (public/phone-rig.js), with ~10 MB of decoded sprites, like the fight game that runs fine on the same phones.
+  // ?phone=0 turns it off, ?phone=1 forces it.
+  const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+  const phone = qs.has('phone') ? qs.get('phone') !== '0' : (IOS || qs.get('mode') === 'phone' || qs.get('lite') === '1');
+  const FPS = Number(qs.get('fps')) || (lite || IOS ? 24 : 30);   // the rig and effects never draw faster than this
   let cfg = { overlay: { character: {} }, trigger: { giftName: 'Rose', minDiamonds: 1 }, tiers: [], voice: {} };
   const events = (window.__events = []);
-  const logEv = (e, extra = {}) => { events.push({ t: Math.round(performance.now()), e, ...extra }); if (events.length > 600) events.splice(0, events.length - 400); };  // capped (it grew forever)
+  const evCount = {};
+  const logEv = (e, extra = {}) => { events.push({ t: Math.round(performance.now()), e, ...extra }); evCount[e] = (evCount[e] || 0) + 1; if (events.length > 600) events.splice(0, events.length - 400); };  // capped (it grew forever)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   // ------------------------------------------------------------ layout & scaling
   function applyLayout() {
-    root.className = prefs.layout === 'landscape' ? 'landscape' : 'vertical';
+    // (toggle, not className =: that wiped the 'lite' / 'phone' classes, so the phone CSS never applied)
+    root.classList.toggle('landscape', prefs.layout === 'landscape'); root.classList.toggle('vertical', prefs.layout !== 'landscape');
     // vertical: 1080 wide, at least 1920 tall (9:16). On taller screens (iPhone ~19.5:9) the canvas grows taller instead of
     // letterboxing, and every box is placed by the TikTok safe zones (fractions of --H), so nothing hides under TikTok's own UI.
     const vert = prefs.layout !== 'landscape';
@@ -101,8 +111,9 @@
     },
     init() {
       if (this.inited) return; this.inited = true;
-      const c = this.c, want = qs.get('mode') || c.mode;
-      if (want === 'rig') this.initRig().catch((e) => { logEv('rig-failed', { err: String(e && e.message || e) }); console.warn('rig failed', e); this.initStill(); });
+      const c = this.c, want = phone ? 'phone' : qs.get('mode') || c.mode;
+      if (want === 'phone') this.initPhone().catch((e) => { logEv('phone-failed', { err: String(e && e.message || e) }); console.warn('phone rig failed', e); this.phoneStill(); });
+      else if (want === 'rig') this.initRig().catch((e) => { logEv('rig-failed', { err: String(e && e.message || e) }); console.warn('rig failed', e); this.initStill(); });
       else if (want === 'video' && c.video.src) this.initVideo().catch((e) => { logEv('video-failed', { err: String(e && e.message || e) }); this.initStill(); });
       else this.initStill();
     },
@@ -161,11 +172,32 @@
         },
         onRestoreFailed: (e) => this.rigFallback(String(e && e.message || e)) });
       charBox.insertBefore(Rig.api.canvas, $('warm'));
-      Rig.v2 = Rig.api.version === 2; root.classList.toggle('charV2', Rig.v2); logEv('rig-on', { version: Rig.api.version });
+      Rig.v2 = Rig.api.version === 2; Rig.bows = Rig.v2; root.classList.toggle('charV2', Rig.v2); logEv('rig-on', { version: Rig.api.version });
       root.classList.add('rigMode');
       layoutChar(); this.build();
       this.mouthOk = false; mouthEl.hidden = true;
       this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'rig' });
+    },
+    /** Phone mode: the sprite puppet on one small 2D canvas (public/phone-rig.js). Same API as the WebGL rig. */
+    async initPhone() {
+      if (!window.MiraPhone) throw new Error('phone-rig.js not loaded');
+      this.kind = 'phone'; Vid.on = false;
+      vid.pause(); vid.removeAttribute('src'); still.removeAttribute('src'); bodyImg.removeAttribute('src');
+      this.aspect = this.c.width / this.c.height;
+      Rig.api = await MiraPhone.create(charBox, { base: this.phoneBase(), seed: 11 });
+      charBox.insertBefore(Rig.api.canvas, $('warm'));
+      Rig.v2 = Rig.api.version === 2; Rig.bows = true; root.classList.toggle('charV2', Rig.v2); logEv('rig-on', { version: Rig.api.version, kind: 'phone' });
+      root.classList.add('rigMode');
+      layoutChar(); this.build();
+      this.mouthOk = false; mouthEl.hidden = true;
+      this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'phone' });
+    },
+    phoneBase() { return charV2() ? '/assets/phone/v2/' : '/assets/phone/v1/'; },
+    /** Phone mode could not start: her small baked picture, nothing else (never the full-size one). */
+    phoneStill() {
+      if (Rig.api) { try { Rig.api.destroy(); } catch {} Rig.api = null; }
+      this.kind = 'still'; root.classList.remove('rigMode'); still.src = this.phoneBase() + 'base.jpg'; mouthEl.hidden = true; this.mouthOk = false;
+      this.aspect = this.c.width / this.c.height; layoutChar(); this.mode = 'idle'; logEv('idle-on', { from: 'loading', kind: 'phone-still' });
     },
     /** Give up on WebGL for this page: free the GPU, keep her still picture (with breathing and the audio-driven mouth). */
     rigFallback(why) {
@@ -265,10 +297,10 @@
     Object.assign(charBox.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
     // effect canvases: no bigger than her painting (they were the full 1404x2495 box, redrawn every frame)
     const ek = Math.min(1, (DEFAULT_CHAR.width * (lite ? 0.6 : 1)) / Math.max(1, w));   // soft glows only: 60% is invisible here
-    for (const c of [scene, mist]) { const cw = Math.round(w * ek), ch = Math.round(h * ek); if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; } }
+    for (const c of [scene, mist]) { const cw = phone ? 1 : Math.round(w * ek), ch = Math.round(h * ek); if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; } }
     if (Rig.api) Rig.api.resize(w, h);
     // sparkles are off in lite mode: keep that full-stage canvas at 1x1 instead of ~1080x2340 (10 MB on an iPhone)
-    const sw = lite ? 1 : W, sh = lite ? 1 : H;
+    const sw = lite || phone ? 1 : W, sh = lite || phone ? 1 : H;
     if (sp.width !== sw || sp.height !== sh) { sp.width = sw; sp.height = sh; }
     if (Vid.on) applyTrack();
   }
@@ -338,6 +370,7 @@
       Rig.api.frame(now, { speaking: lt != null, shape: sh ? sh.shape : 'rest', open: sh ? sh.open : 0, mood: Char.mode === 'prophecy' ? 'prophecy' : 'neutral' });
       if (window.__rigLog) window.__rigLog.push({ t: lt, shape: sh && sh.shape, eye: Rig.api.state.eye });
     }
+    if (phone) return;   // phone mode: no glows, smoke, mist or sparkles (each was a full-size canvas or blend layer)
     // breathing (still mode only; the video breathes by itself): her body copy and the mouth move together
     if (!video && !Rig.api && c.breathing.enabled !== false) {
       const b = (1 - Math.cos((2 * Math.PI * t) / (c.breathing.seconds || 4.6))) / 2, a = c.breathing.amount ?? 0.0045;
@@ -499,7 +532,7 @@
   function unlockAudio() {
     if (SharedAudio.unlocked) return;
     const el = SharedAudio.el;
-    setAudioSrc(el, 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=');
+    setAudioSrc(el, SILENCE);
     el.play().then(() => { el.pause(); SharedAudio.unlocked = true; $('soundChip').hidden = true; }).catch(() => {});
     try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume && actx.resume(); } catch {}
     try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
@@ -509,8 +542,10 @@
   ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((ev) => addEventListener(ev, unlockAudio, { passive: true }));
   if (!renderMode && prefs.audio) {
     // show the tap prompt up front; if the browser already allows sound (desktop / LIVE Studio) it hides itself
-    const probe = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=');
-    probe.play().then(() => { SharedAudio.unlocked = true; }).catch(() => { $('soundChip').hidden = false; });
+    // (on the shared element: no second media element; a real 0.3 s silent MP3, not an empty data: WAV - a WAV with no
+    // samples crashed WebKit's media pipeline in testing, and the fight game that runs fine on iPhones uses a real file too)
+    const el = SharedAudio.el; setAudioSrc(el, SILENCE);
+    el.play().then(() => { el.pause(); SharedAudio.unlocked = true; }).catch(() => { $('soundChip').hidden = false; });
   }
 
   let actx;
@@ -606,8 +641,8 @@
     // body language: she reads the question first (head tilt, brows up), nods hello, smiles at thank-yous
     const lead = (s.start ?? 0.5);
     if (item.sub === 'reply') Rig.gesture('listen', { seconds: lead + 0.5 });
-    else if (Rig.v2 && (item.sub === 'welcome' || item.sub === 'greet')) Rig.gesture('greet', { amp: item.sub === 'welcome' ? 1 : 0.8 });
-    else if (Rig.v2 && item.sub === 'thanks') Rig.gesture('thanks');
+    else if (Rig.bows && (item.sub === 'welcome' || item.sub === 'greet')) Rig.gesture('greet', { amp: item.sub === 'welcome' ? 1 : 0.8 });
+    else if (Rig.bows && item.sub === 'thanks') Rig.gesture('thanks');
     else if (item.sub === 'welcome') { Rig.gesture('nod'); Rig.gesture('happy', { seconds: 0.9 }); }
     else if (item.sub === 'greet') { Rig.gesture('happy', { seconds: 1.9 }); Rig.gesture('nod', { amp: 0.7 }); }
     else Rig.gesture('brow');
@@ -688,6 +723,7 @@
   }
   function startTikFinity() {
     if (typeof TikFinity === 'undefined' || !serverWs || serverWs.readyState !== 1) return;
+    if (IOS && qs.get('tikfinity') !== '1') return;   // TikFinity Desktop can't run on an iPhone: no socket retries to 127.0.0.1 there
     TikFinity.setSink(forwardTikFinity);
     TikFinity.connect();
   }
@@ -711,7 +747,7 @@
     };
     // reconnect with backoff (1 s → 15 s); never reloads the page
     ws.onclose = () => { if (serverWs !== ws) return; serverWs = null; $('conn').classList.remove('ok'); setTimeout(connect, wsWait); wsWait = Math.min(15000, wsWait * 1.7); };
-    ws.onmessage = (e) => {
+    ws.onmessage = (e) => { Diag.ws++;
       const m = JSON.parse(e.data);
       if (m.type === 'audioOwner') { audioOwner = !!m.you; logEv('audio-owner', { you: audioOwner }); if (!audioOwner) stopSpeechAudio(); }
       else if (m.type === 'state') { applyConfig(m); lastQueue = m.queue || []; lastChat = m.chatQueue || []; renderQueue(); }
@@ -722,7 +758,7 @@
       else if (m.type === 'say') say(m.item);
       else if (m.type === 'skip') skip();
       else if (m.type === 'toast') toast(m.text, m.kind);
-      else if (m.type === 'gift') { if (Rig.v2) Rig.gesture('thanks'); else Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
+      else if (m.type === 'gift') { if (Rig.bows) Rig.gesture('thanks'); else Rig.gesture('happy', { seconds: 1.5 }); toast(`🎁 ${m.nickname} sent ${m.giftName}${m.diamonds > 1 ? ` (${m.diamonds})` : ''}`, 'gift', 3); }
       else if (m.type === 'like') hearts(Math.ceil((m.count || 1) / 3));
       else if (m.type === 'follow' && cfg.overlay.showFollowToasts !== false) toast(`💫 ${m.nickname} followed!`, 'info', 3.5);
     };
@@ -793,7 +829,39 @@
     diag: () => window.__diag(),
   };
 
-  if (lite) root.classList.add('lite');
+  // ------------------------------------------------------------ diagnostics (crash breadcrumbs in the server log)
+  // Every 30 s, when hidden / closed, and once at start (with the previous session's last report if it ended without a
+  // pagehide, i.e. probably a crash) the overlay sends a small report to /diag. Nothing on screen; no URL, key or names.
+  const Diag = { id: Math.random().toString(36).slice(2, 8), t0: Date.now(), errs: [], ws: 0 };
+  addEventListener('error', (e) => { Diag.errs.push(String(e.message || e.type).slice(0, 120)); if (Diag.errs.length > 3) Diag.errs.shift(); });
+  addEventListener('unhandledrejection', (e) => { Diag.errs.push('rej ' + String(e.reason && e.reason.message || e.reason).slice(0, 110)); if (Diag.errs.length > 3) Diag.errs.shift(); });
+  function diagReport(reason) {
+    const cv = Rig.api && Rig.api.canvas, pm = window.performance && performance.memory;
+    return { id: Diag.id, reason, up: Math.round((Date.now() - Diag.t0) / 1000), ua: navigator.userAgent.slice(0, 160),
+      mode: { phone, lite, ios: IOS, kind: Char.kind, v: Rig.api ? Rig.api.version : 0, fps: FPS },
+      scr: { w: innerWidth, h: innerHeight, dpr: window.devicePixelRatio || 1 }, cv: cv ? { w: cv.width, h: cv.height } : {},
+      mem: { img: Rig.api && Rig.api.memory ? Math.round(Rig.api.memory() / 1e5) / 10 : undefined, heap: pm ? Math.round(pm.usedJSHeapSize / 1e5) / 10 : undefined, heapMax: pm ? Math.round(pm.jsHeapSizeLimit / 1e6) : undefined },
+      dom: { nodes: document.getElementsByTagName('*').length, imgs: document.images.length, canvases: document.getElementsByTagName('canvas').length, videos: document.getElementsByTagName('video').length },
+      n: { say: (evCount['lips-on'] || 0), lips: evCount['speech-text'] || 0, lost: Rig.lost || 0, ws: Diag.ws, err: Diag.errs.length },
+      last: events.slice(-8).map((e) => e.e), errs: Diag.errs.slice(), vis: document.visibilityState, audio: { unlocked: !!SharedAudio.unlocked, owner: !!audioOwner } };
+  }
+  function sendDiag(reason) {
+    if (renderMode || qs.get('diag') === '0') return;
+    const r = diagReport(reason); let body = JSON.stringify(r);
+    if (reason === 'start') { try { const p = JSON.parse(LS('diagLast') || 'null'); if (p && p.reason !== 'pagehide') body = JSON.stringify({ ...r, prev: p }); } catch {} }
+    try { LS('diagLast', JSON.stringify(r)); } catch {}
+    try { if (!(navigator.sendBeacon && navigator.sendBeacon('/diag', new Blob([body], { type: 'text/plain' })))) fetch('/diag', { method: 'POST', body, keepalive: true, headers: { 'content-type': 'text/plain' } }).catch(() => {}); } catch {}
+  }
+  if (!renderMode) {
+    window.setTimeout(() => sendDiag('start'), 3000);
+    setInterval(() => sendDiag(document.hidden ? 'tick-hidden' : 'tick'), 30e3);
+    addEventListener('pagehide', () => sendDiag('pagehide'));
+    document.addEventListener('visibilitychange', () => sendDiag(document.hidden ? 'hidden' : 'visible'));
+  }
+  window.__diagReport = diagReport;
+
+  if (lite || phone) root.classList.add('lite');
+  if (phone) root.classList.add('phone');
   applyLayout(); syncPanel(); requestAnimationFrame(tick);
   connect();
   window.setTimeout(() => { if (!Char.inited) { Char.init(); } }, 1500);

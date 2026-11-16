@@ -216,3 +216,21 @@ section, aside { transition: opacity .5s, transform .5s; }
 .lite #prophecy:not(.on) { display:none; }
 .lite #mist.idle { display:none; }
 .lite #sparkles { display:none; }
+/* phone mode (iPhone / iPad / ?lite=1 / ?mode=phone): Mira is one small 2D canvas. No blend-mode, blur, backdrop or
+   big-shadow layers (each costs a full-size offscreen surface on iOS) and no effect canvases. */
+.phone #bgBlur, .phone #warm, .phone #lights, .phone #sceneTrack, .phone #scene, .phone #mist, .phone #prophecy, .phone #fx, .phone #still, .phone #body, .phone #mouthWrap, .phone #baseVid { display:none !important; }
+.phone:not(.rigMode) #still { display:block !important; }
+.phone .panelGlass { backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:none; background: linear-gradient(180deg, rgba(36,14,52,.9), rgba(18,6,28,.93)); }
+.phone .toast, .phone #card .face, .phone .num b, .phone #stage, .phone #soundChip { box-shadow:none; }
+.phone * { will-change:auto !important; }
+.phoneCanvas { display:block; }
+/* phone: hidden panels are really gone (opacity 0 kept their layers alive), no 3D card (preserve-3d / backface layers):
+   the card shows its back, then its front, flat; no long-running transitions */
+.phone .hidden { display:none !important; }
+.phone section, .phone aside, .phone .num, .phone #readingText .w { transition:none; }
+.phone #queueList li { animation:none; }
+.phone #cardWrap { perspective:none; }
+.phone #card { transform-style:flat; transition:none; transform:none !important; }
+.phone #card .face { backface-visibility:visible; transform:none; }
+.phone #card:not(.flip) .front, .phone #card.flip .back { display:none; }
+.phone #title, .phone #cardNum, .phone #card .sigil { text-shadow: 0 2px 0 #5a2d00, 0 0 3px #000; }
