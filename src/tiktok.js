@@ -101,7 +101,7 @@ export class TikTokBridge extends EventEmitter {
     this.setDirect('connecting', `@${username}`);
     try {
       const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await this.connector();
-      const opts = { enableExtendedGiftInfo: true, processInitialData: false };
+      const opts = { enableExtendedGiftInfo: false, processInitialData: false }; // extended gift info needs a paid Euler sign plan; giftDetails already has the coin value
       if (this.signApiKey) opts.signApiKey = this.signApiKey; // Euler Stream key, for when TikTok blocks unsigned connections
       const conn = new TikTokLiveConnection(username, opts);
       this.conn = conn;

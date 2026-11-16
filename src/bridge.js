@@ -179,7 +179,7 @@ export class PhoneBridge {
     try {
       const mod = await this.loadConnector();
       const { TikTokLiveConnection, WebcastEvent, ControlEvent } = mod;
-      const opts = { enableExtendedGiftInfo: true, processInitialData: false };
+      const opts = { enableExtendedGiftInfo: false, processInitialData: false };
       if (this.signApiKey) opts.signApiKey = this.signApiKey;
       conn = new TikTokLiveConnection(room.username, opts);
       room.conn = conn;
