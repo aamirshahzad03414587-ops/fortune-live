@@ -2,7 +2,8 @@
 // Finds a full birth date (with year), a name (or falls back to the TikTok display name), optional parents' names
 // and an optional question. Pure functions, no I/O.
 import { spokenName } from './chat.js';
-import { MEANINGS, NUMBER_TITLES, PERSONAL_YEAR, QUESTION_GUIDANCE } from './meanings.js';
+import { NUMBER_TITLES, QUESTION_GUIDANCE } from './meanings.js';
+import { choose, READING_T, LP_SHORT, PY_SHORT, SOUL_SHORT, EXPR_SHORT } from './variety.js';
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const MONTH_WORD = '(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)';
@@ -104,26 +105,36 @@ const ord = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n +
 export const showDate = (d) => `${d.day} ${MONTH_NAMES[d.month - 1]} ${d.year}`;
 export const sayDate = (d) => `the ${ord(d.day)} of ${MONTH_NAMES[d.month - 1]}, ${d.year}`;
 
+const fill = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] ?? ''));
+
 /**
  * Short spoken prediction (about 15-25 s) for a reading asked in the comments.
  * level 1 = Life Path + Personal Year 2026 + answer; 2 adds Soul Urge; 3 adds Destiny.
+ * variety (a Variety from variety.js, one per stream) makes the wording differ for everyone, especially for people
+ * who share a birth date; without it the wording still depends on the name + birth date.
  */
-export function readingScript(reading, parsed, level = 1) {
-  const n = reading.numbers, py = PERSONAL_YEAR[n.personalYear];
+export function readingScript(reading, parsed, level = 1, variety = null) {
+  const n = reading.numbers, who = `${parsed.name}|${parsed.dob}`, dob = parsed.dob;
+  const pick = (cat, list) => (variety ? variety.choose(cat, list, who, dob) : choose(cat, list, who));
+  const name = reading.displayName || parsed.name, first = String(parsed.name).split(' ')[0];
   const s = [];
-  s.push(`You are Life Path ${n.lifePath}, ${MEANINGS.short.lifePath[n.lifePath]}`);
-  s.push(`2026 is your Personal Year ${n.personalYear}, ${py.short}`);
-  if (level >= 2) s.push(`Your heart, Soul Urge ${n.soulUrge}, ${MEANINGS.short.soulUrge[n.soulUrge]}`);
-  if (level >= 3) s.push(`Your destiny, Expression ${n.expression}, ${MEANINGS.short.expression[n.expression]}`);
-  if (n.mother && n.father) s.push(`Your parents' names add a ${n.mother} and a ${n.father} to your path.`);
-  else if (n.mother || n.father) s.push(`Your ${n.mother ? 'mother' : 'father'}'s name adds a ${n.mother || n.father}, ${NUMBER_TITLES[n.mother || n.father].toLowerCase()}.`);
-  if (reading.answer) s.push(`You asked, ${/[?]$/.test(parsed.question) ? parsed.question : parsed.question + '?'} ${QUESTION_GUIDANCE[n.personalYear][reading.answer.topic]}`);
-  const lead = `${reading.displayName || parsed.name}, born ${showDate(parsed.date)}.`;
+  s.push(fill(pick('lp-frame', READING_T.lifePath), { n: n.lifePath, m: pick('lp-' + n.lifePath, LP_SHORT[n.lifePath]) }));
+  s.push(fill(pick('py-frame', READING_T.year), { n: n.personalYear, m: pick('py-' + n.personalYear, PY_SHORT[n.personalYear]) }));
+  if (level >= 2) s.push(fill(pick('su-frame', READING_T.soul), { n: n.soulUrge, m: pick('su-' + n.soulUrge, SOUL_SHORT[n.soulUrge]) }));
+  if (level >= 3) s.push(fill(pick('ex-frame', READING_T.expression), { n: n.expression, m: pick('ex-' + n.expression, EXPR_SHORT[n.expression]) }));
+  if (n.mother && n.father) s.push(fill(pick('parents2', READING_T.parentsBoth), { a: n.mother, b: n.father, M: parsed.mother || 'your mother', F: parsed.father || 'your father' }));
+  else if (n.mother || n.father) {
+    const isM = !!n.mother, num = n.mother || n.father;
+    s.push(fill(pick('parents1', READING_T.parentOne), { who: isM ? 'mother' : 'father', P: (isM ? parsed.mother : parsed.father) || (isM ? 'your mother' : 'your father'), a: num, title: NUMBER_TITLES[num].toLowerCase() }));
+  }
+  if (reading.answer) s.push(fill(pick('question', READING_T.question), { q: /[?]$/.test(parsed.question) ? parsed.question : parsed.question + '?', g: QUESTION_GUIDANCE[n.personalYear][reading.answer.topic] }));
+  else if (level === 1 && !n.mother && !n.father) { const c = fill(pick('closer', READING_T.closer), { first }); if (c) s.push(c); }
+  const lead = fill(pick('lead', READING_T.lead), { name, date: showDate(parsed.date) });
   const keyNumbers = [
     { label: 'Life Path', value: n.lifePath },
     { label: 'Year 2026', value: n.personalYear },
     { label: 'Destiny', value: n.expression },
     ...(n.mother || n.father ? [{ label: 'Family', value: n.mother || n.father }] : [{ label: 'Soul', value: n.soulUrge }]),
   ];
-  return { name: parsed.name, title: NUMBER_TITLES[n.lifePath], keyNumbers, sentences: [lead, ...s], spoken: `${lead} ${s.join(" ")}` };
+  return { name: parsed.name, title: NUMBER_TITLES[n.lifePath], keyNumbers, sentences: [lead, ...s], spoken: `${lead} ${s.join(' ')}` };
 }

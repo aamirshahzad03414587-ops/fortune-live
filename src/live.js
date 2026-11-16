@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { computeReading, liveReading } from './numerology.js';
 import { ReplyEngine, filterComment, llmReply, cleanSpoken, isSelfHarm, isQuestion, withQuestion, welcomeNames, spokenName } from './chat.js';
 import { parseReadingComment, readingScript, showDate } from './comment-reading.js';
+import { Variety, WELCOME_T, WELCOME_ONE_T, HOWTO_T, HOWTO_SHORT_T, EXAMPLE_DATES, IDLE_T } from './variety.js';
 
 export const CODE_RE = /(?:^|[^A-Z0-9])#?([A-HJ-NP-Z]\d{2,4})(?![0-9])/gi;
 export function extractCodes(comment) {
@@ -14,9 +15,11 @@ export function extractCodes(comment) {
 }
 
 const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 1,
-  idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 35,
-  // viewers joining the LIVE: batched ("Welcome Ali, Sara and 3 others!"), at most one welcome every joinGreetSeconds
-  welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 3, readQuestionAloud: true };
+  idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 35,
+  // viewers joining the LIVE: everyone is welcomed BY NAME with a short "how to get a reading". Batched ("Welcome Sara,
+  // Ali and Zoya!"), at most joinMaxNames names per welcome (the rest wait for the next one, nobody is dropped), at most
+  // one welcome every joinGreetSeconds. Readings go first, but while readings are queued a welcome slips in between them.
+  welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 6, readQuestionAloud: true };
 // Readings straight from TikTok comments ("Sara 12/05/1998 will I travel?"). No form, no codes.
 // requireGift=false: everyone who comments a birth date gets one; gifters jump ahead (bigger gift = higher tier).
 export const READINGS_DEFAULTS = { fromComments: true, requireGift: false, perViewerPerStream: 1, maxQueue: 10, giftPriority: true,
@@ -46,6 +49,8 @@ export class LiveEngine extends EventEmitter {
     this.pendingGiftGreets = []; this.pendingFollowGreets = []; this.lastGreetTime = 0;
     this.pendingJoins = []; this.welcomed = new Set(); this.lastWelcomeTime = -1e12;
     this.prepared = new Map(); // chat id -> Promise<{ text, source, sp }> (reply + voice made while she is still talking)
+    // wording variety for this stream (readings, welcomes, idle lines)
+    this.variety = new Variety(`${this.now()}-${Math.random().toString(36).slice(2, 8)}`); this.lastJobKind = null;
     this.lastActivity = 0; this.lastHowTo = this.now(); this.pendingDates = new Map(); this.readingVoice = new Map();
     this.stats = { gifts: 0, diamonds: 0, likes: 0, follows: 0, joins: 0, welcomes: 0, readings: 0, replies: 0, startedAt: this.now() };
     this.emit('queue', this.queue); this.emit('chatQueue', this.chatQueue);
@@ -128,7 +133,7 @@ export class LiveEngine extends EventEmitter {
     if (!id || this.welcomed.has(id)) return { ok: false, reason: 'already-welcomed' };
     this.welcomed.add(id);
     this.pendingJoins.push({ userId: id, nickname: u.nickname || u.uniqueId || 'friend', at: this.now() });
-    if (this.pendingJoins.length > 80) this.pendingJoins.splice(0, this.pendingJoins.length - 80);
+    if (this.pendingJoins.length > 1000) this.pendingJoins.splice(0, this.pendingJoins.length - 1000);   // memory guard only
     this.pump();
     return { ok: true };
   }
@@ -142,11 +147,24 @@ export class LiveEngine extends EventEmitter {
   }
 
   takeWelcome() {
-    const people = this.pendingJoins; this.pendingJoins = [];
+    // every name is spoken: up to joinMaxNames per welcome, the rest are welcomed next time
+    const max = Math.max(1, this.chatCfg.joinMaxNames || 6);
+    const people = this.pendingJoins.slice(0, max); this.pendingJoins = this.pendingJoins.slice(max);
     this.lastWelcomeTime = this.now(); this.stats.welcomes++;
     const names = people.map((p) => p.nickname);
-    const shown = welcomeNames(names, this.chatCfg.joinMaxNames);
-    return { kind: 'say', sub: 'welcome', text: this.replies.welcome(names, this.chatCfg.joinMaxNames), caption: { icon: '👋', title: 'Welcome!', text: shown }, count: people.length };
+    const shown = welcomeNames(names, max);
+    return { kind: 'say', sub: 'welcome', text: this.welcomeText(names), caption: { icon: '👋', title: 'Welcome!', text: shown }, count: people.length, names };
+  }
+
+  /** "Welcome Sara, Ali and Zoya! I'm Mira, I read your destiny with numerology. Type your name and birth date..." */
+  welcomeText(names) {
+    const V = this.variety, list = welcomeNames(names, names.length), key = names.join('|');
+    const hello = V.choose('welcome', names.length > 1 ? WELCOME_T : WELCOME_ONE_T, key).replace('{names}', list);
+    const ex = `${spokenName(names[0]).split(' ')[0] || 'Sara'} ${V.choose('example-date', EXAMPLE_DATES, key)}`;
+    // busy LIVE (many waiting or readings queued): the short how-to, so welcomes stay quick
+    const busy = this.queue.length > 0 || this.pendingJoins.length > 0 || names.length > 3;
+    const how = V.choose(busy ? 'howto-short' : 'howto', busy ? HOWTO_SHORT_T : HOWTO_T, key).replace('{ex}', ex);
+    return `${hello} ${how}`;
   }
 
   // ------------------------------------------------------------------ chat queue
@@ -244,7 +262,7 @@ export class LiveEngine extends EventEmitter {
       tierName: tier ? tier.name : R.freeTierName, level, seconds: tier ? Math.min(tier.secondsOnScreen, 18 + level * 6) : R.freeSeconds,
       priority: paid && R.giftPriority ? 1 + level : 0, at: this.now(), parsed, reading,
       caption: { icon: '🔮', title: `${parsed.name} · ${showDate(parsed.date)}`, text: parsed.question || [parsed.mother && `Mother: ${parsed.mother}`, parsed.father && `Father: ${parsed.father}`].filter(Boolean).join(' · ') || `@${c.nickname}` },
-      ...readingScript(reading, parsed, level),
+      ...readingScript(reading, parsed, level, this.variety),
     };
     if (paid) this.credits.delete(c.userId);
     this.readingsByUser.set(c.userId, done + 1);
@@ -274,7 +292,7 @@ export class LiveEngine extends EventEmitter {
     const tier = this.tierFor(diamonds);
     this.queue.splice(this.queue.indexOf(item), 1);
     Object.assign(item, { tierName: tier.name, level: tier.level, seconds: Math.min(tier.secondsOnScreen, 18 + tier.level * 6), priority: this.readingsCfg.giftPriority ? 1 + tier.level : 0 },
-      readingScript(item.reading, item.parsed, tier.level));
+      readingScript(item.reading, item.parsed, tier.level, this.variety));
     this.readingVoice.delete(item.id); this.prepareReadingVoice(item);
     this.credits.delete(item.userId);
     this.insertByPriority(item);
@@ -288,6 +306,8 @@ export class LiveEngine extends EventEmitter {
   // ------------------------------------------------------------------ director
   nextJob() {
     if (this.adminLines?.length) return { kind: 'say', sub: 'admin', text: this.adminLines.shift() };
+    // readings first, but people who joined are never kept waiting behind a long queue: one welcome between readings
+    if (this.queue.length && this.lastJobKind === 'reading' && this.pendingJoins.length && this.now() - this.pendingJoins[0].at >= this.chatCfg.joinBatchSeconds * 1000) return this.takeWelcome();
     if (this.queue.length) return this.queue.shift();
     const C = this.chatCfg;
     const greetDue = this.now() - this.lastGreetTime >= C.greetCooldownSeconds * 1000;
@@ -331,7 +351,7 @@ export class LiveEngine extends EventEmitter {
       this.scheduleIdlePrompt(); return;
     }
     clearTimeout(this.idleTimer);
-    this.busy = true;
+    this.busy = true; this.lastJobKind = job.kind === 'reading' ? 'reading' : job.sub;
     this.run(job).catch((e) => { console.log('[director]', e); this.finishCurrent(); });
   }
 
@@ -339,6 +359,8 @@ export class LiveEngine extends EventEmitter {
     clearTimeout(this.idleTimer);
     const s = this.chatCfg.idlePromptSeconds;
     if (!this.chatCfg.enabled || !s || s <= 0) return;
+    // never silent for long: a short line after 25-40 s of nothing (idlePromptSeconds caps it; shorter settings are kept)
+    const lo = Math.min(s, 25), hi = Math.min(Math.max(s, lo), 40), wait = lo + (hi - lo) * Math.random();
     this.idleTimer = setTimeout(() => {
       // only prompt while a stream is active (some activity in the last 15 minutes)
       if (this.busy || this.paused || this.now() - this.lastActivity > 15 * 60e3) return;
@@ -346,9 +368,19 @@ export class LiveEngine extends EventEmitter {
       this.busy = true;
       this.replies.liveReadings = !!this.readingsCfg.fromComments;
       if (this.replies.liveReadings) this.lastHowTo = this.now();
-      this.run({ kind: 'say', sub: 'prompt', text: this.replies.idlePrompt(this.chatCfg.idlePrompts), caption: this.replies.liveReadings ? { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } : null }).catch(() => this.finishCurrent());
-    }, s * 1000);
+      this.lastJobKind = 'prompt';
+      this.run({ kind: 'say', sub: 'prompt', text: this.idleLine(), caption: this.replies.liveReadings ? { icon: '🔮', title: 'Get your prediction', text: 'Comment: your name + birth date (+ a question)' } : null }).catch(() => this.finishCurrent());
+    }, wait * 1000);
     this.idleTimer.unref?.();
+  }
+
+  /** Idle line: the streamer's own lines (config chat.idlePrompts) if set, else invites, teasers and numerology facts. */
+  idleLine() {
+    const custom = this.chatCfg.idlePrompts;
+    if (Array.isArray(custom) && custom.length) return this.replies.idlePrompt(custom);
+    if (!this.readingsCfg.fromComments) return this.replies.idlePrompt();
+    this.idleCount = (this.idleCount || 0) + 1;
+    return this.variety.choose('idle', IDLE_T, String(this.idleCount), 'stream');   // no repeats until all were used
   }
 
   async makeReply(chat) {

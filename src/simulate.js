@@ -1,6 +1,7 @@
 // CLI simulator: creates demo form submissions and fakes gifts + code comments.
 // Usage: npm run simulate            (server must be running: npm start)
 //        npm run simulate -- 5       (simulate 5 viewers)
+//        npm run simulate -- busy    (busy live: join bursts + same-birthday comment readings; prints what Mira says)
 import { loadConfig } from './config.js';
 const cfg = loadConfig();
 const base = process.env.BASE_URL || `http://localhost:${cfg.port}`;
@@ -14,8 +15,9 @@ const people = [
   ['Fatima Noor', '1995-04-22', '', '', '', 'Rose', 1],
   ['Hamza Ali', '1978-04-22', '', '', 'Will my exams go well?', 'Rose', 1],
 ];
-const n = Math.min(Number(process.argv[2] || 3), people.length);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+if (process.argv[2] === 'busy') { await busyLive(); process.exit(0); }
+const n = Math.min(Number(process.argv[2] || 3), people.length);
 for (let i = 0; i < n; i++) {
   const [fullName, dob, motherName, fatherName, question, giftName, diamonds] = people[i];
   const nick = fullName.split(' ')[0] + '_' + (100 + i);
@@ -35,3 +37,27 @@ for (const [nickname, comment] of [['Zainab_07', 'Assalam o alaikum Mira!'], ['r
   console.log(`${nickname} comments "${comment}" ->`, r.ok ? 'queued for Mira' : 'skipped: ' + r.reason);
 }
 console.log('Done. Watch the overlay.');
+
+// Busy live: bursts of joins while viewers comment readings (some share a birthday). Logs every line Mira says,
+// so you can check nobody is left un-greeted, readings come first, and she is never silent for long.
+async function busyLive() {
+  const { WebSocket } = await import('ws');
+  const t0 = Date.now(); const ts = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+  const said = [];
+  ws.on('message', (m) => { const d = JSON.parse(m); if (d.type === 'say' || d.type === 'reveal') { const it = d.item; said.push({ t: Date.now() - t0, it }); console.log(`${ts()} [${d.type}/${it.sub || it.kind || it.tierName || ''}] ${it.spoken || it.text || ''}`); } });
+  await new Promise((r) => ws.on('open', r));
+  const joiners = ['Sara', 'Ali', 'Zoya', 'Hina', 'Omar', 'Bilal', 'Ayesha', 'Fatima', 'Hamza', 'Noor', 'Rohan', 'Maya', 'Zain', 'Iqra', 'Usman', 'Mehak', 'Asad', 'Laiba'];
+  const readings = [['Sara_1', 'Sara 12/05/1998'], ['Ali_2', 'Ali 12/05/1998 will I travel this year?'], ['Zoya_3', 'Zoya 12-05-1998 mother Nadia father Imran'], ['Omar_4', 'Omar 3 march 1990']];
+  const joined = [];
+  for (let i = 0; i < joiners.length; i++) { await post('/sim/join', { nickname: joiners[i] }); joined.push(joiners[i]); if (i % 6 === 5) await sleep(1500); }
+  for (const [nickname, comment] of readings) { const r = await post('/sim/comment', { nickname, comment }); console.log(`${ts()} ${nickname}: "${comment}" ->`, r.ok ? 'queued' : r.reason); }
+  await sleep(4000); for (const n of ['Kiran', 'Danish', 'Sana']) { await post('/sim/join', { nickname: n }); joined.push(n); }
+  const dur = Number(process.env.SIM_SECONDS || 240) * 1000;
+  while (Date.now() - t0 < dur) await sleep(1000);
+  const all = said.map((s) => s.it.spoken || s.it.text || '').join(' ');
+  const missed = joined.filter((n) => !all.includes(n));
+  const gaps = said.slice(1).map((s, i) => (s.t - said[i].t) / 1000);
+  console.log(`\n${said.length} lines; joiners ${joined.length}, not greeted: ${missed.length ? missed.join(', ') : 'none'}; longest gap between line starts ${Math.max(0, ...gaps).toFixed(1)} s`);
+  ws.close();
+}

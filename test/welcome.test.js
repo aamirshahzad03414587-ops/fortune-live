@@ -39,10 +39,12 @@ test('joins are batched into one welcome after a short wait', () => {
   clock.t += 2600;
   const job = live.nextJob();
   assert.equal(job.sub, 'welcome');
-  assert.equal(job.count, 5);
-  assert.match(job.text, /Ali, Sara, Omar and 2 others/);
-  assert.equal(job.caption.text, 'Ali, Sara, Omar and 2 others');
-  assert.equal(live.pendingJoins.length, 0);
+  assert.equal(job.count, 3);
+  // nobody is summed up as "and 2 others" any more: 3 names now (joinMaxNames), the other 2 in the next welcome
+  assert.match(job.text, /Ali, Sara and Omar/);
+  assert.equal(job.caption.text, 'Ali, Sara and Omar');
+  assert.deepEqual(live.pendingJoins.map((p) => p.nickname), ['Hina', 'Zoya']);
+  assert.match(job.text, /birth date/i, 'every welcome says how to get a reading');
 });
 
 test('at most one welcome every joinGreetSeconds; each viewer welcomed once per stream', () => {

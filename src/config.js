@@ -29,8 +29,8 @@ const DEFAULTS = {
     effects: { sparkles: true, sparkleCount: 28, ballGlow: true, floatingCards: false },
   },
   voice: { enabled: true, voice: 'en-US-AvaNeural', urduVoice: 'ur-PK-UzmaNeural', hindiVoice: 'hi-IN-SwaraNeural', rate: '+2%', pitch: '+6%', browserLang: 'en-US', readingSpeechStart: 3, talkSpeechStart: 0.6, tailSeconds: 0.8, minSaySeconds: 3 },
-  chat: { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 0.6, prefetchReplies: 2, idlePromptSeconds: 45, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, greetDelaySeconds: 4, maxReplyWords: 35,
-    welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 3, readQuestionAloud: true },
+  chat: { enabled: true, mode: 'everyone', userCooldownSeconds: 30, maxQueue: 12, maxCommentAgeSeconds: 120, secondsBetweenReplies: 0.6, prefetchReplies: 2, idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, greetDelaySeconds: 4, maxReplyWords: 35,
+    welcomeJoins: true, joinGreetSeconds: 10, joinBatchSeconds: 2.5, joinMaxNames: 6, readQuestionAloud: true },
   llm: { enabled: false, baseUrl: '', apiKey: '', model: '', temperature: 0.9, maxTokens: 120, timeoutMs: 8000, extraPersona: '' },
 };
 

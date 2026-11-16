@@ -50,9 +50,10 @@ test('reading script: real numbers, short enough to speak in about 15-25 s', () 
   const s = readingScript(r, p, 1);
   assert.equal(s.keyNumbers[0].value, lifePathNumber('1998-05-12'));
   assert.equal(s.keyNumbers[1].value, personalYearNumber('1998-05-12', 2026));
-  assert.match(s.spoken, /^Ayesha, born 12 May 1998\. You are Life Path 8/);
+  assert.match(s.spoken, /^(Ah, |Here we go, )?Ayesha, .*12 May 1998\./);
+  assert.match(s.spoken, /Life Path 8|Number 8 rules your Life Path/);
   assert.match(s.spoken, /Personal Year 9/);
-  assert.match(s.spoken, /You asked, will I travel this year\?/);
+  assert.match(s.spoken, /will I travel this year\?/);
   const words = s.spoken.split(/\s+/).length;
   assert.ok(words >= 35 && words <= 70, `${words} words`);
 });

@@ -124,7 +124,7 @@
     "maxQueue": 12,
     "maxCommentAgeSeconds": 120,
     "secondsBetweenReplies": 0.6,
-    "idlePromptSeconds": 45,
+    "idlePromptSeconds": 35,
     "idlePrompts": [],
     "greetGifters": true,
     "greetFollowers": true,
@@ -134,7 +134,7 @@
     "welcomeJoins": true,
     "joinGreetSeconds": 10,
     "joinBatchSeconds": 2.5,
-    "joinMaxNames": 3,
+    "joinMaxNames": 6,
     "readQuestionAloud": true,
     "prefetchReplies": 2
   },
