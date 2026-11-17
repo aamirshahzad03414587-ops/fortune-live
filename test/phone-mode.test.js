@@ -86,9 +86,9 @@ test('phone rig: feeling() picks an expression from what she says (and the knowl
   assert.equal(f('Your number is 7.'), null);
 });
 
-test('overlay: only phone mode gets expressions / tarot cards (PC rig untouched)', () => {
+test('overlay: phone mode draws expressions / tarot cards on its canvas; the PC rig itself is untouched (cards go to its effects canvas)', () => {
   const js = fs.readFileSync(P('overlay.js'), 'utf8'), rig = fs.readFileSync(P('rig.js'), 'utf8');
   assert.match(js, /if \(Rig\.api && Rig\.api\.react\) Rig\.api\.react\(item\.text, item\.mood, item\.sub\)/);
-  assert.match(js, /if \(Rig\.api && Rig\.api\.showCards && item\.cards\) Rig\.api\.showCards\(item\.cards/);
+  assert.match(js, /if \(Rig\.api && Rig\.api\.showCards\) Rig\.api\.showCards\(item\.cards[^;]*; else DeskFX\.show\(item\.cards/);
   assert.doesNotMatch(rig, /showCards|react\(/);
 });

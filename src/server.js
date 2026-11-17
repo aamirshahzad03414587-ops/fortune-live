@@ -50,7 +50,7 @@ app.get('/r/:token', formOnly, (req, res) => res.sendFile(path.join(pub, 'report
 app.get('/overlay', (req, res) => res.sendFile(path.join(pub, 'overlay.html')));
 app.get('/admin', requireKey, (req, res) => res.sendFile(path.join(pub, 'admin.html')));
 app.post('/diag', express.text({ type: '*/*', limit: '8kb' }), diagRoute());
-app.get(['/healthz', '/health'], (req, res) => res.json({ ok: true, tiktok: tiktok.status.state, keepAlive: keepAlive.url ? { everyMinutes: keepAlive.minutes, last: keepAlive.last, ok: keepAlive.ok } : null }));
+app.get(['/healthz', '/health'], (req, res) => res.json({ ok: true, tiktok: tiktok.status.state, keepAlive: keepAlive.url ? { everyMinutes: keepAlive.minutes, last: keepAlive.last, ok: keepAlive.ok } : null, voice: { check: tts.check || null, ...tts.stats } }));
 app.get('/tts/:id.mp3', (req, res) => {
   const buf = tts.get(req.params.id);
   if (!buf) return res.status(404).end();
@@ -243,6 +243,7 @@ server.listen(config.port, () => {
   console.log('');
   if (tiktok.usesDirect && tiktok.username) tiktok.connect().catch((e) => console.log('[tiktok]', e.message));
   startKeepAlive();
+  if (process.env.TTS_SELFTEST !== '0' && !process.env.NODE_TEST_CONTEXT) setTimeout(() => tts.selfTest().catch(() => {}), 3000).unref?.();
 });
 
 // Keep the free Render server awake (it sleeps after 15 minutes without inbound HTTP, and a sleeping server can't read

@@ -237,3 +237,18 @@ section, aside { transition: opacity .5s, transform .5s; }
 
 /* any language: Urdu / Arabic lines read right-to-left, Hindi and others as written (direction follows the text) */
 #readingText, .cbText, .toast { unicode-bidi: plaintext; }
+
+/* the always-on banner: bold gold on a dark glass pill. Vertical: the free strip between TikTok's comments (end ~88%)
+   and its input bar (bottom ~8%), never over her face or the bubbles. Landscape: under the right-hand panels. */
+#mysticBanner { position:absolute; z-index:6; display:flex; align-items:center; justify-content:center; gap:14px; pointer-events:none;
+  font-family:'Cinzel Decorative', Georgia, serif; font-weight:900; color:#ffe7a8; letter-spacing:.5px; white-space:nowrap;
+  background:linear-gradient(180deg, rgba(40,12,64,.88), rgba(16,4,28,.9)); border:2px solid rgba(232,194,106,.9); border-radius:999px;
+  text-shadow:0 0 10px rgba(255,200,120,.75), 0 2px 0 #5a2d00; box-shadow:0 0 18px rgba(190,110,255,.45), inset 0 0 12px rgba(232,194,106,.25); }
+#mysticBanner[hidden] { display:none; }
+#mysticBanner .mbStar { color:#e8c26a; font-size:.9em; animation:mbTwinkle 2.4s ease-in-out infinite; }
+#mysticBanner .mbStar:last-child { animation-delay:1.2s; }
+@keyframes mbTwinkle { 0%,100% { opacity:.55; } 50% { opacity:1; } }
+.vertical #mysticBanner { left:110px; right:150px; top:calc(var(--u) * 88.3); height:calc(var(--u) * 3.6); font-size:36px; }
+.landscape #mysticBanner { left:740px; right:60px; bottom:48px; height:62px; font-size:30px; }
+.phone #mysticBanner { box-shadow:none; text-shadow:0 2px 0 #5a2d00, 0 0 3px #000; background:linear-gradient(180deg, rgba(40,12,64,.92), rgba(16,4,28,.94)); }
+.phone #mysticBanner .mbStar { animation:none; opacity:.9; }

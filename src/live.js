@@ -24,7 +24,7 @@ export function extractCodes(comment) {
 // maxCommentAgeSeconds are answered together, by name, in one group line (groupMaxNames per line). While her real
 // answer (AI + voice) takes longer than fillerAfterMs she says a short "thinking" line first (thinkingFiller).
 const CHAT_DEFAULTS = { enabled: true, mode: 'everyone', maxQueue: 12, maxCommentAgeSeconds: 150, secondsBetweenReplies: 1,
-  overflowMax: 300, groupMaxNames: 6, mergeMax: 3, thinkingFiller: true, fillerAfterMs: 900, aiMaxBacklog: 4, voiceMaxWaitMs: 14000,
+  overflowMax: 300, groupMaxNames: 6, mergeMax: 3, thinkingFiller: true, fillerAfterMs: 900, aiMaxBacklog: 4, voiceMaxWaitMs: 22000,
   idlePromptSeconds: 35, idlePrompts: [], greetGifters: true, greetFollowers: true, greetCooldownSeconds: 8, maxReplyWords: 45,
   // conversations: a viewer answering Mira's question (within followUpSeconds) skips the cooldown and continues the
   // thread; nobody gets more than maxConsecutiveTurns replies in a row while others wait; when quiet, Mira sometimes
@@ -620,7 +620,7 @@ export class LiveEngine extends EventEmitter {
       if (chat.others?.length) text += ` Same to you, ${welcomeNames(chat.others, 3)}!`;
       // the last free follow-up of a reading session ends it, gently
       if (lastOfSession) text += ' ' + fill(this.variety.choose('session-end', SESSION_END_T, chat.userId, 'stream'), { name: spokenName(chat.nickname) });
-      return { text, source, ...extra, sp: await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 14000) };
+      return { text, source, ...extra, sp: await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 22000) };
     } catch { return null; }
   }
 
@@ -641,7 +641,10 @@ export class LiveEngine extends EventEmitter {
       const [a, b] = await Promise.all([this.tts.cachedClip(name + ','), this.tts.cachedClip(tpl.replace(/^\{name\},\s*/, ''))]);
       return a && b ? { text, ...this.tts.register(Buffer.concat([a, b])), server: true } : null;
     })();
-    const sp = { ...((await Promise.race([voice, new Promise((r) => { const t = setTimeout(() => r(null), 700); t.unref?.(); })])) || { text, url: null, duration: this.estimate(text), server: false }) };
+    // never a silent bubble: if the voice for the filler is not ready at once, she skips the filler
+    const ready = await Promise.race([voice, new Promise((r) => { const t = setTimeout(() => r(null), 1200); t.unref?.(); })]);
+    if (!ready) return;
+    const sp = { ...ready };
     sp.start = 0.2;
     const total = Math.max(this.voiceCfg.minSaySeconds ?? 1.5, sp.start + sp.duration + (this.voiceCfg.tailSeconds ?? 0.3));
     sp.start = Math.min(sp.start, this.voiceCfg.talkSpeechStart ?? 0.2);
@@ -659,8 +662,8 @@ export class LiveEngine extends EventEmitter {
       return audio;
     })();
     // a reply never waits forever for the voice: after maxMs the overlay speaks it with the device voice / captions
-    audio = maxMs > 0 ? await Promise.race([tries, new Promise((r) => { const t = setTimeout(() => r(null), maxMs); t.unref?.(); })]) : await tries;
-    if (!audio && maxMs > 0) this.emit('log', 'voice too slow, the overlay uses its own voice');
+    audio = maxMs > 0 && this.tts ? await Promise.race([tries, new Promise((r) => { const t = setTimeout(() => r(null), maxMs); t.unref?.(); })]) : await tries;
+    if (!audio && this.tts && this.tts.getConfig?.().enabled !== false) this.emit('log', `[diag] no voice for a line (${maxMs > 0 ? 'every free voice failed or took > ' + maxMs / 1000 + ' s' : 'every free voice failed'}); the overlay falls back to the device voice / captions`);
     return { text, url: audio?.url || null, duration: audio ? audio.duration : this.estimate(text), voice: audio?.voice || null, server: !!audio };
   }
 
@@ -698,7 +701,7 @@ export class LiveEngine extends EventEmitter {
       if (r) ({ text, source, sp, cards = null, mood = null } = r);
       else { text = this.replies.reply(job.chat.comment, job.chat).text; }
     }
-    if (!sp) sp = await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 14000);
+    if (!sp) sp = await this.speech(text, this.chatCfg.voiceMaxWaitMs ?? 22000);
     sp = { ...sp };
     sp.start = V.talkSpeechStart;
     const total = Math.max(V.minSaySeconds ?? 3, sp.start + sp.duration + V.tailSeconds);
