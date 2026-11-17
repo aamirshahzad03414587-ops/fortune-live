@@ -116,7 +116,42 @@
   const charV2 = () => (qs.get('char') || (cfg.overlay.character || {}).char) === 'v2';
   const ID = [1, 0, 0, 0, 1, 0];
   /** Rig mode: the live puppet (null in video / still mode). */
-  const Rig = { api: null, gesture(kind, o) { if (this.api) this.api.gesture(kind, o); } };
+  const Rig = { api: null, gesture(kind, o) {
+    if (!this.api) return;
+    // "looking into the crystal ball": phone mode does it all on its canvas (hands, swirl); the desktop rig looks down
+    // ('think') and the effects canvas swirls the ball
+    if ((kind === 'gaze' || kind === 'gazeEnd') && !this.api.gazeHands) { if (kind === 'gaze') this.api.gesture('think', o); DeskFX[kind](o); return; }
+    this.api.gesture(kind, o);
+  } };
+  /** Desktop rig: crystal-ball swirl and tarot card pulls on a small 2D canvas over the WebGL rig (public/mira-fx.js). */
+  const DeskFX = {
+    cv: null, g: null, cards: null, until: 0, amt: 0, dirty: false, last: 0, k: 0.5,
+    init(api) {
+      this.destroy();
+      if (phone || !window.MiraFX || !api || !api.rig || !api.rig.ball) return;
+      const r = api.rig, [bx, by, br] = r.ball, cw = Math.round(br * 1.25), ch = Math.round(cw * 1.667);
+      this.cv = document.createElement('canvas'); this.cv.className = 'layer fxCanvas';
+      this.cv.width = Math.round(r.width * this.k); this.cv.height = Math.round(r.height * this.k); this.g = this.cv.getContext('2d');
+      api.canvas.after(this.cv); this.ball = [bx, by, br];
+      this.cards = MiraFX.Cards({ W: cw, H: ch, deck: [bx + br * 1.2, by + br * 0.62],
+        layout: (n) => n === 1 ? [{ x: bx + br + cw * 0.7, y: by - br * 0.35, rot: 0.04, scale: 1 }]
+          : [0, 1, 2].slice(0, n).map((i) => ({ x: bx + br + cw * 0.6 + (i - (n - 1) / 2) * cw * 0.62, y: by - br * 0.5 + Math.abs(i - (n - 1) / 2) * 14, rot: (i - (n - 1) / 2) * 0.2, scale: 0.85 })) });
+    },
+    gaze(o = {}) { this.until = Math.max(this.until, this.last + (o.seconds || 3)); },
+    gazeEnd() { this.until = 0; },
+    show(cards, delay, hold) { if (this.cards) this.cards.show(cards, this.last, { delay, hold }); },
+    frame(now) {
+      if (!this.cv) return;
+      const t = now / 1000, dt = Math.min(0.1, Math.max(0, t - (this.last || t))); this.last = t;
+      this.amt += ((this.until > t ? 1 : 0) - this.amt) * (1 - Math.exp(-(this.until > t ? 3.2 : 2.2) * dt));
+      const busy = this.amt > 0.01 || this.cards.active, g = this.g;
+      if (!busy) { if (this.dirty) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, this.cv.width, this.cv.height); this.dirty = false; } return; }
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, this.cv.width, this.cv.height); g.setTransform(this.k, 0, 0, this.k, 0, 0);
+      MiraFX.drawBall(g, t, this.ball[0], this.ball[1], this.ball[2], Math.max(this.amt, this.cards.reach(t) * 0.6));
+      this.cards.draw(g, t); this.dirty = true;
+    },
+    destroy() { if (this.cards) this.cards.destroy(); if (this.cv) { this.cv.width = 1; this.cv.remove(); } this.cv = this.g = this.cards = null; },
+  };
   /** Video mode state: the track and the loop frame currently on screen. */
   const Vid = { on: false, track: null, idx: 0, frames: 1, lastMedia: -1, rvfc: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
     A(kind) { const t = this.track; return t ? t[kind][this.idx] || ID : ID; } };
@@ -191,6 +226,7 @@
         },
         onRestoreFailed: (e) => this.rigFallback(String(e && e.message || e)) });
       charBox.insertBefore(Rig.api.canvas, $('warm'));
+      DeskFX.init(Rig.api);
       Rig.v2 = Rig.api.version === 2; Rig.bows = Rig.v2; root.classList.toggle('charV2', Rig.v2); logEv('rig-on', { version: Rig.api.version });
       root.classList.add('rigMode');
       layoutChar(); this.build();
@@ -221,7 +257,7 @@
     /** Give up on WebGL for this page: free the GPU, keep her still picture (with breathing and the audio-driven mouth). */
     rigFallback(why) {
       clearTimeout(Rig.lostTimer); logEv('rig-fallback', { why });
-      if (Rig.api) { Rig.api.destroy(); Rig.api = null; }
+      if (Rig.api) { Rig.api.destroy(); Rig.api = null; } DeskFX.destroy();
       Rig.paused = false; root.classList.remove('rigMode'); this.initStill();
     },
     initStill() {
@@ -388,6 +424,7 @@
       const sh = lt == null ? null : LipSync.shapeAt(Lip.track, lt + (c.mouth.leadMs ?? 30) / 1000);
       Rig.api.frame(now, { speaking: lt != null, shape: sh ? sh.shape : 'rest', open: sh ? sh.open : 0, mood: Char.mode === 'prophecy' ? 'prophecy' : 'neutral' });
       if (window.__rigLog) window.__rigLog.push({ t: lt, shape: sh && sh.shape, eye: Rig.api.state.eye });
+      DeskFX.frame(now);
     }
     if (phone) return;   // phone mode: no glows, smoke, mist or sparkles (each was a full-size canvas or blend layer)
     // breathing (still mode only; the video breathes by itself): her body copy and the mouth move together
@@ -674,6 +711,7 @@
     const startMs = (s.start ?? 3) * 1000;
     if (item.prophecy) Char.prophecy(); else if (Char.mode === 'prophecy') Char.idle();
     Rig.gesture('think', { seconds: Math.max(2, (s.start ?? 3) - 0.3) });
+    Rig.gesture('gaze', { seconds: Math.max(3.5, (s.start ?? 3) + 2.5) });   // she looks into the crystal ball, then tells it
     if (Rig.api && Rig.api.react) { Rig.api.gesture('glow'); later(Math.max(2200, startMs), () => Rig.api && Rig.api.react && Rig.api.react(item.sentences.join(' '), null, 'reading')); }
     const ctl = playSpeech(s, startMs);
     ctl.ended.then(() => { if (curSpeech === ctl || !curSpeech) setTimeout(() => { if (!Lip.clock) Char.idle(); }, 700); });
@@ -684,6 +722,7 @@
     later((item.seconds || 20) * 1000, endShow);
   }
 
+  const GAZE_RE = /crystal ball|the ball|let me (see|look|read)|look(ing)? (into|deep)|the stars (say|show|whisper|are)|i see |predict|prophec|the cards|your future|destiny|fate/i;
   function say(item) {
     clearLater(); logEv('say', { id: item.id, sub: item.sub });
     if (Char.mode === 'prophecy') Char.idle();
@@ -704,7 +743,13 @@
     else Rig.gesture('brow');
     // phone mode (lively): an expression for what she says, and the tarot cards she pulls flip over on the canvas
     if (Rig.api && Rig.api.react) Rig.api.react(item.text, item.mood, item.sub);
-    if (Rig.api && Rig.api.showCards && item.cards) Rig.api.showCards(item.cards, lead + 0.3);
+    // the crystal ball: her "let me look" lines, readings/predictions and mystic answers; a card pull: she draws the cards
+    const sec = (s.duration || 3) + lead;
+    if (item.sub === 'filler') Rig.gesture('gaze', { seconds: sec + 4 });   // she keeps looking until her answer comes
+    else if (item.cards && item.cards.length) Rig.gesture('gaze', { seconds: Math.min(3, sec) });
+    else if (GAZE_RE.test(item.text || '') || item.mood === 'mystic' || item.mood === 'prophecy') Rig.gesture('gaze', { seconds: Math.min(4.5, sec) });
+    else Rig.gesture('gazeEnd');
+    if (item.cards && item.cards.length) { if (Rig.api && Rig.api.showCards) Rig.api.showCards(item.cards, lead + 0.2, sec + 0.5); else DeskFX.show(item.cards, lead + 0.2, sec + 0.5); }
     $('readingText').innerHTML = '';
     const startMs = (s.start ?? 0.5) * 1000;
     const ctl = playSpeech(s, startMs);
@@ -747,6 +792,8 @@
     cfg = { ...cfg, ...m, overlay: { ...(m.overlay || cfg.overlay) } };
     const o = cfg.overlay;
     $('title').textContent = o.title || 'Fate Reading';
+    // always-on banner (config overlay.bannerText; '' or ?banner=0 hides it)
+    { const bt = o.bannerText ?? 'Ask me anything about the mystical arts'; $('mbText').textContent = bt; $('mysticBanner').hidden = !bt || qs.get('banner') === '0'; }
     $('cta').textContent = o.callToAction || '';
     const g = cfg.trigger || {};
     $('giftTxt').textContent = g.minDiamonds > 1 ? `a ${g.minDiamonds}-coin gift` : `1 ${g.giftName || 'gift'} ${/rose/i.test(g.giftName) ? '🌹' : '🎁'}`;
@@ -849,7 +896,7 @@
     prophecyOn: proph.classList.contains('on'), prophecyOpacity: getComputedStyle(proph).opacity, speech: curSpeech ? curSpeech.how : null,
     charBox: { w: charBox.clientWidth, h: charBox.clientHeight }, lite, fps: FPS, audioOwner, rigLost: Rig.lost || 0,
     rigCanvas: Rig.api ? [Rig.api.canvas.width, Rig.api.canvas.height] : null });
-  window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync, Rig };
+  window.__fortune = { reveal, say, toast, hearts, Char, Mouth, Lip, LipSync, Rig, DeskFX };
   // Frame-accurate renderer (?render=1): virtual clock for timers, CSS animations, lips and the video frame.
   const animBase = new WeakMap();
   window.__render = {

@@ -66,6 +66,8 @@ test('AI rate-limited: the reply falls back to the knowledge base / built-in ans
 test('thinking filler: a slow answer gets a short "let me see" line first, never twice in a row', async () => {
   const { live, said } = setup({ chat: { fillerAfterMs: 30 }, llm: { enabled: true, baseUrl: 'http://x', model: 'm', noKey: true, minIntervalSeconds: 3 } });
   live.llm = async () => { await sleep(150); return 'Sara, Venus smiles on you.'; };
+  // a voice is ready for the filler (a filler without a voice is skipped: never a silent bubble)
+  live.tts = { cachedClip: async () => Buffer.alloc(800), register: () => ({ id: 'f', url: '/tts/f.mp3', duration: 0.05 }), synth: async () => null };
   live.handleChat({ userId: 's', nickname: 'Sara', comment: 'will I find love?' });
   await sleep(400);
   assert.equal(said[0].sub, 'filler'); assert.match(said[0].text, /Sara/);
@@ -131,4 +133,12 @@ test('session: follow-ups are separate answers (not merged) up to the free ones 
   live.setPaused(false); await sleep(200);
   const sara = said.filter((x) => x.sub === 'reply' && x.comment?.nickname === 'Sara');
   assert.equal(sara.length, 2); assert.match(sara[1].text, /free follow-up|session is complete|closes your reading/);
+});
+
+test('a filler whose voice is not ready is skipped (no bubble without voice)', async () => {
+  const { live, said } = setup({ chat: { fillerAfterMs: 30 }, llm: { enabled: true, baseUrl: 'http://x', model: 'm', noKey: true, minIntervalSeconds: 3 } });
+  live.llm = async () => { await sleep(150); return 'Sara, Venus smiles on you.'; };
+  live.handleChat({ userId: 's', nickname: 'Sara', comment: 'will I find love?' });
+  await sleep(1600);
+  assert.deepEqual(said.map((x) => x.sub), ['reply']);
 });

@@ -17,7 +17,7 @@ const DEFAULTS = {
   limits: { readingsPerUserPerStream: 1, usesPerCode: 1, maxQueueLength: 30, giftCreditMinutes: 10, secondsBetweenReadings: 3, maxSubmissionsPerIpPerHour: 10 },
   data: { retentionHours: 24, maxRetentionHoursIfUserOptsOut: 168 },
   overlay: {
-    title: 'Fate Reading', callToAction: '', characterImage: '/assets/mira2.jpg', showQueue: true, queueVisibleCount: 5, showLikeHearts: true, showFollowToasts: true, showChat: true, browserVoiceFallback: true,
+    title: 'Fate Reading', callToAction: '', bannerText: 'Ask me anything about the mystical arts', characterImage: '/assets/mira2.jpg', showQueue: true, queueVisibleCount: 5, showLikeHearts: true, showFollowToasts: true, showChat: true, browserVoiceFallback: true,
     character: {
       mode: 'rig',
       rig: { base: '/assets/rig/', image: '/assets/mira2.jpg' },

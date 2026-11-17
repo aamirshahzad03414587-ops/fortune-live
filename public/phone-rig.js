@@ -48,6 +48,11 @@
     const jobs = [loadImg(base + 'base.jpg').then((i) => (imgs.base = i))];
     for (const k of layers) jobs.push(loadImg(base + man[k].src).then((i) => (imgs[k] = i)));
     for (const k of Object.keys(man.patches)) jobs.push(loadImg(base + k + '.png').then((i) => (imgs[k] = i)));
+    // crystal-ball gaze: her hands rise over the ball (v1: her resting hands leave the table; tools/build-hand-sprites.py)
+    for (const sd of ['l', 'r']) {
+      if (man.hands && man.hands[sd]) jobs.push(loadImg(base + man.hands[sd].src).then((i) => (imgs['hand-' + sd] = i)).catch(() => {}));
+      if (man.restHands && man.restHands[sd]) jobs.push(loadImg(base + man.restHands[sd].fill).then((i) => (imgs['rest-fill-' + sd] = i)).catch(() => {}));
+    }
     await Promise.all(jobs);
     const canvas = document.createElement('canvas'); canvas.className = 'layer rigCanvas phoneCanvas';
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -61,7 +66,7 @@
       gestures: [], blink: { next: 1.5, start: -1, dbl: false }, eye: 'open', gaze: { cur: null, next: 1.2 }, browUp: 0, browDown: 0, browKick: 0,
       mouth: { cur: null }, idleSmileNext: 6, idleSmileUntil: 0, roll: 0, yaw: 0, pitch: 0, headX: 0, headXv: 0,
       hair: { x: 0, v: 0 }, tail1: { x: 0, v: 0 }, tail2: { x: 0, v: 0 }, charm: { x: 0, v: 0 }, charm2: { x: 0, v: 0 }, swayPrev: 0,
-      glow: 0, cards: null, frames: 0, drawn: 0, expr: null };
+      glow: 0, cards: null, frames: 0, drawn: 0, expr: null, gazeUntil: 0, gazeAmt: 0, handAmt: 0, reach: 0 };
 
     function gesture(kind, o = {}) {
       const t = S.t;
@@ -77,6 +82,9 @@
       else if (kind === 'blink') S.blink.next = t;
       else if (kind === 'brow') S.browKick = 1;
       else if (kind === 'glow') S.glow = 1;
+      // looking into the crystal ball: head down, eyes on the ball, hands rise over it, the ball swirls and glows
+      else if (kind === 'gaze') { S.gazeUntil = Math.max(S.gazeUntil, t + (o.seconds || 3)); S.glow = 1; S.gaze.next = t; }
+      else if (kind === 'gazeEnd') S.gazeUntil = t;
     }
     /** An expression for what she is about to say (called when a line starts). */
     function react(text, mood, sub) {
@@ -90,57 +98,21 @@
       return f;
     }
 
-    // ------------------------------------------------------------ tarot card flip (drawn on the same canvas)
-    const CW = 118, CH = 196;
-    function cardFace(c) {
-      const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH; const g = cv.getContext('2d');
-      g.fillStyle = '#f5e9cf'; g.fillRect(0, 0, CW, CH);
-      g.strokeStyle = '#b8892c'; g.lineWidth = 6; g.strokeRect(4, 4, CW - 8, CH - 8); g.lineWidth = 1.5; g.strokeRect(11, 11, CW - 22, CH - 22);
-      const sym = c.arcana === 'major' ? '★' : { Wands: '🜂', Cups: '🜄', Swords: '🜁', Pentacles: '⛤' }[c.suit] || '✦';
-      g.fillStyle = '#5b2d86'; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.font = 'bold 54px Georgia, serif'; g.fillText(sym === '🜂' ? '♣' : sym === '🜄' ? '♥' : sym === '🜁' ? '♠' : sym === '⛤' ? '✪' : sym, CW / 2, CH * 0.4);
-      g.font = 'bold 15px Georgia, serif';
-      const words = c.name.split(' '); const lines = []; let line = '';
-      for (const w of words) { if ((line + ' ' + w).trim().length > 11) { lines.push(line.trim()); line = w; } else line += ' ' + w; }
-      lines.push(line.trim());
-      lines.slice(0, 3).forEach((l, i) => g.fillText(l, CW / 2, CH * 0.7 + i * 17));
-      if (c.reversed) { const r = document.createElement('canvas'); r.width = CW; r.height = CH; const rg = r.getContext('2d'); rg.translate(CW, CH); rg.rotate(Math.PI); rg.drawImage(cv, 0, 0); cv.width = 1; return r; }
-      return cv;
+    // ------------------------------------------------------------ tarot card pulls (public/mira-fx.js, same canvas)
+    // the phone layout zooms in on her (the bottom of the table is off screen; TikTok's comments cover the left):
+    // one card stands right of the ball, three fan out there; the deck lies on the table right of the ball
+    const CW = 132, CH = 220;
+    const FX = root.MiraFX;
+    const cards = FX ? FX.Cards({ W: CW, H: CH, deck: [bx + br * 1.2, by + br * 0.62],
+      layout: (n) => n === 1 ? [{ x: bx + br + CW * 0.62, y: by - br * 0.3, rot: 0.04, scale: 1 }]
+        : [0, 1, 2].slice(0, n).map((i) => ({ x: bx + br + CW * 0.42 + (i - (n - 1) / 2) * CW * 0.6, y: by - br * 0.45 + Math.abs(i - (n - 1) / 2) * 14, rot: (i - (n - 1) / 2) * 0.2, scale: 0.78 })) }) : null;
+    /** Pull up to 3 cards: her hand reaches for the deck, each card slides out, flips over, stays `hold` s, fades. */
+    function showCards(list, delay = 0.6, hold = 7) {
+      if (!cards || !list || !list.length) return;
+      cards.show(list, S.t, { delay, hold });
+      S.cards = true; S.glow = 1;
     }
-    let cardBack = null;
-    function backFace() {
-      if (cardBack) return cardBack;
-      const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH; const g = cv.getContext('2d');
-      g.fillStyle = '#2a0f45'; g.fillRect(0, 0, CW, CH); g.strokeStyle = '#d9a93f'; g.lineWidth = 5; g.strokeRect(4, 4, CW - 8, CH - 8);
-      g.fillStyle = '#d9a93f'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '44px Georgia, serif'; g.fillText('☾', CW / 2, CH / 2 - 26); g.fillText('✦', CW / 2, CH / 2 + 30);
-      return (cardBack = cv);
-    }
-    function showCards(cards, delay = 0.6) {
-      const list = (cards || []).slice(0, 3); if (!list.length) return;
-      // the phone layout zooms in on her (the bottom of the table is off screen): one card stands beside the ball,
-      // three float in a row just above it
-      const n = list.length, scale = n === 1 ? 1 : 0.78, gap = CW * scale + 12;
-      const cx = n === 1 ? bx + br + CW * 0.62 : bx + 18, y = n === 1 ? by - br * 0.25 : by - br - CH * scale * 0.5 + 18;
-      S.cards = list.map((c, i) => ({ face: cardFace(c), x: cx + (i - (n - 1) / 2) * gap, y, scale, t0: S.t + delay + i * 0.45, dur: n === 1 ? 7 : 8.5 }));
-      S.glow = 1;
-    }
-    function drawCards() {
-      if (!S.cards) return;
-      let alive = false;
-      for (const c of S.cards) {
-        const u = S.t - c.t0; if (u < -0.001 || u > c.dur) { if (u <= c.dur) alive = true; continue; }
-        alive = true;
-        const rise = ease(u / 0.35), fade = u > c.dur - 0.5 ? 1 - ease((u - (c.dur - 0.5)) / 0.5) : 1;
-        const flip = clamp((u - 0.35) / 0.55, 0, 1), sx = Math.abs(Math.cos(Math.PI * flip)) || 0.02, face = flip > 0.5 ? c.face : backFace();
-        const w = CW * c.scale, h = CH * c.scale, cy = c.y + (1 - rise) * 40 - 6 * Math.sin(u * 1.6);
-        ctx.save(); ctx.globalAlpha = rise * fade; ctx.translate(c.x, cy); ctx.rotate(0.03 * Math.sin(u * 1.1 + c.x));
-        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(-w * sx / 2 + 4, -h / 2 + 6, w * sx, h);
-        ctx.drawImage(face, -w * sx / 2, -h / 2, w * sx, h);
-        if (flip > 0.5 && flip < 1) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = (1 - flip) * 1.6 * rise; ctx.fillStyle = '#ffd98a'; ctx.fillRect(-w * sx / 2, -h / 2, w * sx, h); }
-        ctx.restore();
-      }
-      if (!alive) { for (const c of S.cards) c.face.width = 1; S.cards = null; }
-    }
+    function drawCards() { if (!cards) return; cards.draw(ctx, S.t); S.cards = cards.active || null; }
 
     // ------------------------------------------------------------ motion
     function update(dt, inp) {
@@ -153,6 +125,9 @@
       S.surprise = approach(S.surprise, S.surpriseUntil > t ? 1 : 0, 9, dt);
       S.laugh = approach(S.laugh, S.laughUntil > t ? 1 : 0, 8, dt);
       S.smile = approach(S.smile, S.smileUntil > t ? 1 : 0, 4, dt);
+      S.gazeAmt = approach(S.gazeAmt, S.gazeUntil > t ? 1 : 0, S.gazeUntil > t ? 3.2 : 2.2, dt);
+      S.reach = cards ? cards.reach(t) : 0;
+      S.handAmt = Math.max(S.gazeAmt, S.reach);
       // body: clear breathing (shoulders rise ~3 px, chest widens) and a slow sway about the hips
       const breath = 3.0 * (1 - Math.cos((2 * Math.PI * t) / (speaking ? 3.4 : 4.6))) / 2;
       let sway = 0.0085 * noise(t * 0.13, 5) + 0.004 * S.talk * Math.sin(t * 0.9 + 0.5 * Math.sin(t * 0.6)) + 0.006 * S.laugh * Math.sin(t * 9);
@@ -163,6 +138,7 @@
       let pitch = 1.2 * noise(t * 0.23, 7) + S.talk * (1.8 * S.open + 0.8 * noise(t * 1.1, 2));
       roll += S.listen * 0.06 * S.listenSide; yaw += S.listen * 2.4 * S.listenSide; pitch -= S.listen * 1.2;
       roll += S.think * 0.035; pitch += S.think * 2.4; yaw -= S.think * 1.2;
+      pitch += S.gazeAmt * 3.6; roll -= S.gazeAmt * 0.02; lean += S.gazeAmt * 4;   // she leans in and looks down into the ball
       roll += S.happy * 0.03 * Math.sin(t * 2.1);
       pitch += S.laugh * 1.8 * Math.abs(Math.sin(t * 8.5)); roll += S.laugh * 0.02 * Math.sin(t * 4.2);
       pitch -= S.surprise * 2.2;
@@ -196,12 +172,13 @@
       if (speaking && inp.open > 0.8 && (S.lastBrowOpen || 0) <= 0.8 && R() < 0.1) S.browKick = Math.max(S.browKick, 0.7);
       S.lastBrowOpen = inp.open || 0;
       S.browUp = approach(S.browUp, clamp(Math.max(S.listen, S.browKick, S.surprise) * 1.0 + S.happy * 0.25, 0, 1), 10, dt);
-      S.browDown = approach(S.browDown, clamp(S.think * 0.75 * (1 - S.surprise), 0, 1), 6, dt);
+      S.browDown = approach(S.browDown, clamp(Math.max(S.think * 0.75, S.gazeAmt * 0.55) * (1 - S.surprise), 0, 1), 6, dt);
       // eyes: glances (saccades are instant), back to the viewer often; up toward the comment when listening,
       // down into the ball when thinking
       if (t >= S.gaze.next) {
         let g = null;
         if (S.listen > 0.5) g = S.listenSide < 0 ? 'ul' : 'ur';
+        else if (S.gazeAmt > 0.4) g = 'd';
         else if (S.think > 0.5) g = R() < 0.6 ? 'd' : R() < 0.5 ? 'ul' : 'ur';
         else if (R() > (speaking ? 0.6 : 0.5)) g = GAZES[Math.floor(R() * GAZES.length)];
         if (g && !imgs['gaze-' + g]) g = null;
@@ -216,7 +193,7 @@
         if (i >= seq.length) { b.start = -1; b.next = t + 2.0 + R() * 4.2; } else S.eye = seq[i][0];
       }
       if (S.happy > 0.5) S.eye = S.happy > 0.8 ? 'happy' : 'lid1'; else if (S.happy > 0.15 && S.eye === 'open') S.eye = 'lid1';
-      if (S.think > 0.6 && S.eye === 'open' && S.gaze.cur === 'd') S.eye = 'lid1';     // eyelids lower, looking into the ball
+      if ((S.think > 0.6 || S.gazeAmt > 0.5) && S.eye === 'open' && S.gaze.cur === 'd') S.eye = 'lid1';     // eyelids lower, looking into the ball
       if (S.smile > 0.6 && S.eye === 'open' && !speaking) S.eye = 'lid1';             // a warm, soft look
       // mouth: the viseme from the voice; smiles, an "oh!" when surprised, laughing
       let shape = speaking ? inp.shape || null : null;
@@ -233,7 +210,7 @@
       S.mouth.cur = shape;
       // glow + sparkles
       S.glow = approach(S.glow, 0, 0.8, dt);
-      const spawn = 0.35 + S.glow * 2 + S.think * 0.8 + (S.cards ? 1.2 : 0);
+      const spawn = 0.35 + S.glow * 2 + S.think * 0.8 + S.gazeAmt * 2.5 + (S.cards ? 1.2 : 0);
       for (const p of sparkles) if (t - p.born > p.life && R() < spawn * dt) {
         const a = R() * Math.PI * 2, rr = br * (0.9 + R() * 0.7);
         Object.assign(p, { born: t, life: 1.1 + R() * 1.4, x: bx + Math.cos(a) * rr, y: by + Math.sin(a) * rr * 0.7 - br * 0.2, vy: -(10 + R() * 18), size: 2.5 + R() * 3.5 });
@@ -252,7 +229,28 @@
         ctx.restore();
       }
     }
+    /** Her hands rise from the cuffs and hover over the ball (soft circles), palms glowing; the right one reaches for the deck. */
+    function hands(t) {
+      const a = ease(S.handAmt); if (a < 0.02 || !man.hands) return;
+      for (const sd of ['l', 'r']) {
+        const im = imgs['hand-' + sd], hm = man.hands[sd]; if (!im) continue;
+        const side = sd === 'l' ? -1 : 1, [rx, ry, rw, rh] = hm.rect, [wx, wy] = hm.wrist;
+        const hover = S.gazeAmt;
+        let dx = -side * (1 - a) * 10 + Math.sin(t * 2.3 + side) * 2.5 * hover, dy = (1 - a) * 26 + Math.cos(t * 1.9 + side * 0.7) * 3 * hover;
+        let rot = 0.05 * Math.sin(t * 1.6 + side) * hover - side * (1 - a) * 0.3;
+        if (sd === 'r' && S.reach > 0.01 && cards) { const e = ease(S.reach); dx += (cards.deck[0] - (rx + rw * 0.4)) * 0.55 * e; dy += (cards.deck[1] - (ry + rh * 0.5)) * 0.5 * e; rot += 0.35 * e; }
+        ctx.save(); ctx.globalAlpha = a; ctx.translate(wx + dx, wy + dy); ctx.rotate(rot); ctx.translate(-wx, -wy);
+        ctx.drawImage(im, rx, ry, rw, rh);
+        ctx.restore();
+        // a violet glow under the palm
+        const px = rx + rw * (sd === 'l' ? 0.62 : 0.38) + dx, py = ry + rh * 0.62 + dy, pr = rw * 0.55;
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        const gg = ctx.createRadialGradient(px, py, 0, px, py, pr); gg.addColorStop(0, `rgba(220,160,255,${0.32 * a * (0.8 + 0.2 * Math.sin(t * 4 + side))})`); gg.addColorStop(1, 'rgba(160,80,255,0)');
+        ctx.fillStyle = gg; ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2); ctx.restore();
+      }
+    }
     function glow(t) {
+      if (FX) FX.drawBall(ctx, t, bx, by, br, Math.max(S.gazeAmt, S.reach * 0.6, S.glow * 0.5));
       ctx.save(); ctx.globalCompositeOperation = 'lighter';
       // crystal ball: a slow pulse, brighter when she is reading / thinking / a card is pulled
       const pulse = 0.5 + 0.5 * Math.sin(t * 1.6) * Math.sin(t * 0.37 + 1);
@@ -284,6 +282,8 @@
       ctx.drawImage(imgs.base, 0, 0, man.width, man.height);
       // the charm hangs in the static part of the picture; the table goes back in front of it
       if (imgs.charm) { strips(imgs.charm, man.charm.rect, man.charm.anchor, man.charm.length, S.charm.x, S.charm2.x - S.charm.x, 10); if (imgs.tableFront) { const r = man.tableFront.rect; ctx.drawImage(imgs.tableFront, r[0], r[1], r[2], r[3]); } }
+      // v1: while her hands are up, the table where they rested shows (filled in)
+      if (man.restHands && S.handAmt > 0.02) for (const sd of ['l', 'r']) { const im = imgs['rest-fill-' + sd], r = man.restHands[sd].rect; if (im) { ctx.globalAlpha = ease(S.handAmt); ctx.drawImage(im, r[0], r[1], r[2], r[3]); ctx.globalAlpha = 1; } }
       ctx.save();
       // body: about the hips, translate(h) . rotate . scale(sx, sy) . translate(-h)
       const c = Math.cos(S.sway), s = Math.sin(S.sway);
@@ -298,12 +298,13 @@
       p('brow-up', S.browUp); p('brow-down', S.browDown * (1 - S.browUp));
       if (S.mouth.cur) p('mouth-' + S.mouth.cur);
       ctx.restore();
+      hands(t);
       glow(t);
       drawCards();
       S.drawn++;
     }
     const api = {
-      canvas, version: man.version, kind: 'phone', lively: true, state: S, gesture, react, showCards, lost: false, manifest: man,
+      canvas, version: man.version, kind: 'phone', lively: true, state: S, gesture, react, showCards, lost: false, manifest: man, gazeHands: !!man.hands,
       /** Backing size: what is shown (CSS size after the stage's scale) x min(devicePixelRatio, 2), never above the sprites. */
       resize(w, h) {
         const d = Math.min(2, opts.dpr || window.devicePixelRatio || 1);
@@ -324,10 +325,9 @@
       memory() {
         let px = canvas.width * canvas.height;
         for (const i of Object.values(imgs)) if (i) px += i.naturalWidth * i.naturalHeight;
-        if (cardBack) px += CW * CH; if (S.cards) px += S.cards.length * CW * CH;
-        return px * 4;
+        return px * 4 + (cards ? cards.memory() : 0);
       },
-      destroy() { api.dead = true; canvas.width = canvas.height = 1; canvas.remove(); for (const k in imgs) { if (imgs[k]) imgs[k].src = ''; imgs[k] = null; } if (cardBack) cardBack.width = 1; },
+      destroy() { api.dead = true; canvas.width = canvas.height = 1; canvas.remove(); for (const k in imgs) { if (imgs[k]) imgs[k].src = ''; imgs[k] = null; } if (cards) cards.destroy(); },
     };
     container.appendChild(canvas);
     return api;
